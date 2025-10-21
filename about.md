@@ -8,7 +8,7 @@ comments: false
 
 Olá! Meu nome é **Higor Carniato**.
 
-Desde minha infância, sempre fui muito curioso quando se tratava de tecnologia e tenho navegado em fóruns de hackers de jogos desde 2013/2014. Em 2016, tive a oportunidade de começar a trabalhar na área em que venho atuando desde então.
+Desde minha infância, sempre fui muito **apaixonado**/**curioso** quando se tratava de tecnologia e tenho navegado em fóruns de hackers de jogos desde 2013/2014. Em 2016, tive a oportunidade de começar a trabalhar na área em que venho atuando desde então.
 
 C# É uma linguagem com a qual me sinto mais confortável e produtivo. C++ é outra linguagem que adoro trabalhar, e atualmente meus estudos estão focados em programação de baixo nível, explorando sistemas próximos ao hardware e otimização de performance.
 

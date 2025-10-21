@@ -1,8 +1,8 @@
 # Site settings
 title: Higor Carniato # site title
 description: >- # site description
-  Blog pessoal sobre tecnologia, desenvolvimento e aprendizados. 
-  Estudante de Engenharia de Software focado em C# e programação de baixo nível.
+  Blog pessoal sobre tecnologia e desenvolvimento. 
+  Cocado em C/C++ e programação de baixo nível.
 lang: pt-BR # default lang
 timezone: America/Sao_Paulo # set your timezone
 image: assets/img/higor-2025-01-20.jpg # This image used for Open Graph more info https://ogp.me/
@@ -13,7 +13,7 @@ mode: dark # default theme "dark" | "light"
 author:
   name: Higor Carniato # author name
   bio: >- # tell to the world
-    Estudante de Engenharia de Software. Desenvolvedor C# e C/C++, 
+    Desenvolvedor C# e C/C++, 
     apaixonado por programação de baixo nível e tecnologia.
   username: cnthigu # general username
   github: cnthigu # github username

@@ -5,7 +5,7 @@ description: >- # site description
   Estudante de Engenharia de Software focado em C# e programação de baixo nível.
 lang: pt-BR # default lang
 timezone: America/Sao_Paulo # set your timezone
-image: assets/img/og-image.jpg # This image used for Open Graph more info https://ogp.me/
+image: assets/img/higor-carniato-blog.jpg # This image used for Open Graph more info https://ogp.me/
 repo: https://github.com/cnthigu/cnthigu.github.io # site repo [optional]
 mode: dark # default theme "dark" | "light"
 

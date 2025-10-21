@@ -64,7 +64,7 @@ Aqui começa a brincadeira! Esta é a função que estamos analisando.
 Como você pode ver na imagem acima, esta é exatamente como a função `NtOpenCompositionSurfaceSectionInfo` está **antes** de aplicarmos qualquer modificação. 
 
 Observando o código assembly, vemos que a função original é bem simples:
-- `xor eax, eax` - Zera o registrador EAX
+- `mov rax, rsp` - Move o valor do ponteiro da stack (RSP) para o registrador RAX
 - `ret` - Retorna da função
 
 **Importante:** Na imagem você pode ver que `48 8b c4` está destacado - esses são **3 bytes** do código original. Isso é perfeito para nosso hook, pois precisamos de pelo menos 5 bytes para fazer o jump, e essa função tem espaço suficiente para nossa técnica funcionar.

@@ -79,15 +79,15 @@ Este código:
 ## Estrutura do Projeto
 
 ```
-KernelCheatYT/
+Driver/
 │
-├── KernelCheatYT/               # Driver Kernel
+├── Driver                       # Driver Kernel
 │   ├── main.cpp                 # Ponto de entrada do driver (DriverEntry)
 │   ├── hook.cpp/h               # Implementação do hook inline
 │   ├── memory.cpp/h             # Funções para manipulação de memória
 │   ├── definitions.h            # Definições de estruturas não documentadas
-│   ├── KernelCheatYT.inf        # Arquivo de informações do driver
-│   └── KernelCheatYT.vcxproj    # Projeto do Visual Studio
+│   ├── Driver.inf               # Arquivo de informações do driver
+│   └── Driver.vcxproj           # Projeto do Visual Studio
 │
 ├── user_mode/                   # Aplicação Usermode
 │   ├── main.cpp                 # Cliente que se comunica com o driver
@@ -99,7 +99,7 @@ KernelCheatYT/
 ├── .gitignore                   # Arquivos ignorados pelo Git
 │
 └── x64/Release/                 # Binários compilados
-    ├── KernelCheatYT.sys        # Driver final
+    ├── Driver.sys               # Driver final
     └── user_mode.exe            # Aplicação final
 ```
 
@@ -627,28 +627,9 @@ Usado para:
 
 ---
 
-## Conclusão
-
-Este projeto demonstra conceitos avançados de programação em kernel mode:
-- **Inline Hooking** - Modificação de código em tempo de execução
-- **Comunicação Kernel ↔ Usermode** - Através de funções hookadas
-- **Manipulação de Memória Protegida** - Usando MDL
-- **Shellcode em x64** - Assembly de baixo nível
-- **Arquitetura de Drivers Windows** - WDM/KMDF
-- **Processos e DLLs** - PEB, LDR, module enumeration
-
 **⚠️ AVISO IMPORTANTE:**
 - Este projeto é apenas para **fins educacionais**
-- Use apenas em **ambientes de teste controlados** (VMs)
 - Um erro no kernel pode causar **tela azul (BSOD)**
-- Nunca use em sistemas de produção
-
-**📚 Para Aprender Mais:**
-- Leia os guias completos: [COMO_CONSTRUIR.md](COMO_CONSTRUIR.md) e [COMO_CONSTRUIR_USERMODE.md](COMO_CONSTRUIR_USERMODE.md)
-- Estude o código com atenção
-- Experimente em uma VM
-- Aprenda sobre anti-cheat e detecção
 
 ---
 
-**Criado para fins educacionais. Bons estudos! 🚀**

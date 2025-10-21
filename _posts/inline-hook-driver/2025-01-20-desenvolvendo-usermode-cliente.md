@@ -492,11 +492,6 @@ template<typename S>
 bool write(UINT_PTR address, const S& value) { ... }
 ```
 
-**Vantagens:**
-- Funciona com qualquer tipo de dados
-- Type-safe
-- Código reutilizável
-
 
 ## Conclusão
 
@@ -505,15 +500,7 @@ Este projeto demonstra uma arquitetura completa de comunicação entre usermode 
 - **Driver Kernel:** Intercepta funções do sistema
 - **Cliente Usermode:** Comunica com o driver através de funções hookadas
 - **Estrutura Compartilhada:** Permite troca de dados
-- **Templates C++:** Código flexível e type-safe
 
-**Principais aprendizados:**
-1. **KernelCallbackTable** é essencial para comunicação
-2. **win32u.dll** é a interface usermode para kernel
-3. **Templates** tornam o código mais flexível
-4. **Validação** é crucial para evitar crashes
-
----
 
 **Posts relacionados:**
 - [Encontrando Funções no Windows com WinDbg](/encontrando-funcoes-windbg/)

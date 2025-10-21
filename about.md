@@ -6,7 +6,7 @@ excerpt: Desenvolvedor apaixonado por tecnologia. Este é um blog pessoal onde c
 comments: false
 ---
 
-Olá! Meu nome é **Higor Carniato**, estudante de Engenharia de Software.
+Olá! Meu nome é **Higor Carniato**.
 
 Desde minha infância, sempre fui muito curioso quando se tratava de tecnologia e tenho navegado em fóruns de hackers de jogos desde 2013/2014. Em 2016, tive a oportunidade de começar a trabalhar na área em que venho atuando desde então.
 

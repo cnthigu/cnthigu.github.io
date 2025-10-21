@@ -67,9 +67,9 @@ Observando o código assembly, vemos que a função original é bem simples:
 - `mov rax, rsp` - Move o valor do ponteiro da stack (RSP) para o registrador RAX
 - `ret` - Retorna da função
 
-**Importante:** Na imagem você pode ver que `48 8b c4` está destacado - esses são **3 bytes** do código original. Isso é perfeito para nosso hook, pois precisamos de pelo menos 5 bytes para fazer o jump, e essa função tem espaço suficiente para nossa técnica funcionar.
+**Importante:** Na imagem você pode ver que `48 8b c4` está destacado - esses são **3 bytes** do código original. Isso é perfeito para nosso hook, pois precisamos de **12 bytes** no total: 2 bytes para o `mov rax`, 8 bytes para o endereço que vamos hookar, e 2 bytes para voltar. Essa função tem espaço suficiente para nossa técnica funcionar.
 
-Esta é a função "limpa" que vamos analisar. Mais tarde, quando aplicarmos modificações, esses primeiros bytes serão substituídos pelo nosso código.
+Esta é a função "limpa" que vamos analisar. Ná print abaixo, quando aplicarmos modificações, esses primeiros bytes serão substituídos pelo nosso código:
 
 ![Terceira imagem mostrando detalhes da função antes do hook](/assets/img/3_terceira.png)
 

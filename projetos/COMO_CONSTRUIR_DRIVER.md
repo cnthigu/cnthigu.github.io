@@ -815,7 +815,7 @@ Anote o endereço (ex: `fffff807'12345678`)
 Na VM, execute:
 
 ```
-kdmapper.exe KernelCheatYT.sys
+kdmapper.exe driver.sys
 ```
 
 #### 8.8. Verificar o Hook

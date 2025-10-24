@@ -1,5 +1,5 @@
 ---
-title: "Encontrando Funções no Windows com WinDbg - Function Hooking Parte 1"
+title: "Encontrando funções no Windows com WinDbg — Hooking de funções — Parte 1"
 date: 2025-01-20 08:00:00 -0300
 categories: [Segurança, Reverse Engineering]
 tags: [windbg, kernel, debugging, windows, reverse-engineering, syscalls]
@@ -130,4 +130,4 @@ Agora que sabemos como encontrar e analisar funções, podemos:
 
 ---
 
-**Próximo post:** [Desenvolvendo Driver de Function Hooking em Kernel Mode](/desenvolvendo-driver-function-hooking/)
+**Próximo post:** [Desenvolvendo driver para hooking de funções — Parte 2](/desenvolvendo-driver-function-hooking/)

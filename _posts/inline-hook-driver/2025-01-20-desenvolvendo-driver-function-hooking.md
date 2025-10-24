@@ -1,5 +1,5 @@
 ---
-title: "Desenvolvendo Driver de Function Hooking em Kernel Mode - Parte 2"
+title: "Desenvolvendo driver para hooking de funções — Parte 2"
 date: 2025-01-20 09:00:00 -0300
 categories: [Segurança, Kernel Development]
 tags: [driver, kernel, function-hooking, c++, assembly, windows, reverse-engineering]
@@ -7,7 +7,7 @@ tags: [driver, kernel, function-hooking, c++, assembly, windows, reverse-enginee
 
 ## Introdução
 
-Este post é a continuação de "[Encontrando Funções no Windows com WinDbg](/encontrando-funcoes-windbg/)", onde aprendemos a usar o WinDbg para analisar funções do kernel. Agora, vamos mergulhar no desenvolvimento de um driver kernel que implementa a técnica de **Function Hooking**.
+Este post é a continuação de "[Encontrando funções no Windows com WinDbg — Hooking de funções — Parte 1](/encontrando-funcoes-windbg/)", onde aprendemos a usar o WinDbg para analisar funções do kernel. Agora, vamos mergulhar no desenvolvimento de um driver kernel que implementa a técnica de **Function Hooking**.
 
 > ⚠️ **Aviso**: Este conteúdo é **exclusivamente educacional**. Use apenas em ambientes controlados (VMs) e para fins de aprendizado.
 
@@ -1020,4 +1020,4 @@ Este projeto demonstra conceitos avançados de programação em kernel mode:
 
 ---
 
-**Próximo post:** [Desenvolvendo Cliente Usermode para Function Hooking - Parte 3](/desenvolvendo-usermode-cliente/)
+**Próximo post:** [Desenvolvendo cliente usermode para hooking de funções — Parte 3](/desenvolvendo-usermode-cliente/)

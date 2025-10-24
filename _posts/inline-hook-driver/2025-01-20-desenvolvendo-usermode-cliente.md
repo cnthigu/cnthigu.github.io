@@ -1,5 +1,5 @@
 ---
-title: "Desenvolvendo cliente usermode para hooking de funções — Parte 3"
+title: "Desenvolvendo cliente usermode para comunicação com driver — Parte 3"
 date: 2025-01-20 10:00:00 -0300
 categories: [Segurança, Kernel Development]
 tags: [usermode, driver, comunicação, c++, windows, function-hooking]

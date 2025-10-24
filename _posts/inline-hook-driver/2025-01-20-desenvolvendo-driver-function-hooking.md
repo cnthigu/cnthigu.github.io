@@ -1020,4 +1020,4 @@ Este projeto demonstra conceitos avançados de programação em kernel mode:
 
 ---
 
-**Próximo post:** [Desenvolvendo cliente usermode para hooking de funções — Parte 3](/desenvolvendo-usermode-cliente/)
+**Próximo post:** [Desenvolvendo cliente usermode para comunicação com driver — Parte 3](/desenvolvendo-usermode-cliente/)

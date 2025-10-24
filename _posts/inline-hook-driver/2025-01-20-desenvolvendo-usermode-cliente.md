@@ -8,7 +8,6 @@ tags: [usermode, driver, comunicação, c++, windows, function-hooking]
 ## Introdução
 
 Este post é a continuação de "[Desenvolvendo Driver de Function Hooking em Kernel Mode](/desenvolvendo-driver-function-hooking/)", onde criamos o driver kernel. Agora vamos desenvolver a aplicação usermode que se comunica com o driver através do hook.
-Este post é a continuação de "[Desenvolvendo Driver de Function Hooking em Kernel Mode](/desenvolvendo-driver-inline-hook/)", onde criamos o driver kernel. Agora vamos desenvolver a aplicação usermode que se comunica com o driver através do hook.
 
 > ⚠️ **Aviso**: Este conteúdo é **exclusivamente educacional**. Use apenas em ambientes controlados (VMs) e para fins de aprendizado.
 

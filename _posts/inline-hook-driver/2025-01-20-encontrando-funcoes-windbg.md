@@ -1,5 +1,5 @@
 ---
-title: "Encontrando Funções no Windows com WinDbg"
+title: "Encontrando Funções no Windows com WinDbg - Function Hooking Parte 1"
 date: 2025-01-20 08:00:00 -0300
 categories: [Segurança, Reverse Engineering]
 tags: [windbg, kernel, debugging, windows, reverse-engineering, syscalls]

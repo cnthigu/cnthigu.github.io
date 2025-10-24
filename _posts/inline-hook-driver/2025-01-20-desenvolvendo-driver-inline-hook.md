@@ -1,5 +1,5 @@
 ---
-title: "Desenvolvendo um Driver de Inline Hook em Kernel Mode"
+title: "Desenvolvendo Driver de Function Hooking em Kernel Mode - Parte 2"
 date: 2025-01-20 09:00:00 -0300
 categories: [Segurança, Kernel Development]
 tags: [driver, kernel, inline-hook, c++, assembly, windows, reverse-engineering]
@@ -7,13 +7,13 @@ tags: [driver, kernel, inline-hook, c++, assembly, windows, reverse-engineering]
 
 ## Introdução
 
-Este post é a continuação de "[Encontrando Funções no Windows com WinDbg](/encontrando-funcoes-windbg/)", onde aprendemos a usar o WinDbg para analisar funções do kernel. Agora, vamos mergulhar no desenvolvimento de um driver kernel que implementa a técnica de **Inline Hooking**.
+Este post é a continuação de "[Encontrando Funções no Windows com WinDbg](/encontrando-funcoes-windbg/)", onde aprendemos a usar o WinDbg para analisar funções do kernel. Agora, vamos mergulhar no desenvolvimento de um driver kernel que implementa a técnica de **Function Hooking**.
 
 > ⚠️ **Aviso**: Este conteúdo é **exclusivamente educacional**. Use apenas em ambientes controlados (VMs) e para fins de aprendizado.
 
-## O que é Inline Hook?
+## O que é Function Hooking?
 
-Um **inline hook** substitui os primeiros bytes de uma função com um jump (salto) para sua própria função. É como colocar um "desvio" no código original.
+Um **function hook** substitui os primeiros bytes de uma função com um jump (salto) para sua própria função. É como colocar um "desvio" no código original.
 
 ### Exemplo Visual
 

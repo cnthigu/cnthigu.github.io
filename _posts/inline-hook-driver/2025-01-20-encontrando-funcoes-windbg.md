@@ -124,10 +124,10 @@ Este site contém uma tabela completa de todas as system calls do Windows, inclu
 Agora que sabemos como encontrar e analisar funções, podemos:
 
 1. **Desenvolver o driver** que vai interceptar essas funções
-2. **Implementar o inline hook** para redirecionar chamadas
+2. **Implementar o function hook** para redirecionar chamadas
 3. **Criar comunicação** entre kernel e usermode
 4. **Testar e debugar** nossa implementação
 
 ---
 
-**Próximo post:** [Desenvolvendo um Driver de Inline Hook em Kernel Mode](/desenvolvendo-driver-inline-hook/)
+**Próximo post:** [Desenvolvendo Driver de Function Hooking em Kernel Mode](/desenvolvendo-driver-function-hooking/)

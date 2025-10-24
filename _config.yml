@@ -2,7 +2,7 @@
 title: Higor Carniato # site title
 description: >- # site description
   Blog pessoal sobre tecnologia e desenvolvimento. 
-  Cocado em C/C++ e programação de baixo nível.
+  Focado em C/C++ e programação de baixo nível.
 lang: pt-BR # default lang
 timezone: America/Sao_Paulo # set your timezone
 image: assets/img/higor-2025-01-20.jpg # This image used for Open Graph more info https://ogp.me/

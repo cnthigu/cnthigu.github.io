@@ -2,11 +2,12 @@
 title: "Desenvolvendo Cliente Usermode para Function Hooking - Parte 3"
 date: 2025-01-20 10:00:00 -0300
 categories: [Segurança, Kernel Development]
-tags: [usermode, driver, comunicação, c++, windows, inline-hook]
+tags: [usermode, driver, comunicação, c++, windows, function-hooking]
 ---
 
 ## Introdução
 
+Este post é a continuação de "[Desenvolvendo Driver de Function Hooking em Kernel Mode](/desenvolvendo-driver-function-hooking/)", onde criamos o driver kernel. Agora vamos desenvolver a aplicação usermode que se comunica com o driver através do hook.
 Este post é a continuação de "[Desenvolvendo Driver de Function Hooking em Kernel Mode](/desenvolvendo-driver-inline-hook/)", onde criamos o driver kernel. Agora vamos desenvolver a aplicação usermode que se comunica com o driver através do hook.
 
 > ⚠️ **Aviso**: Este conteúdo é **exclusivamente educacional**. Use apenas em ambientes controlados (VMs) e para fins de aprendizado.
@@ -504,4 +505,4 @@ Este projeto demonstra uma arquitetura completa de comunicação entre usermode 
 
 **Posts relacionados:**
 - [Encontrando Funções no Windows com WinDbg](/encontrando-funcoes-windbg/)
-- [Desenvolvendo um Driver de Inline Hook em Kernel Mode](/desenvolvendo-driver-inline-hook/)
+- [Desenvolvendo Driver de Function Hooking em Kernel Mode](/desenvolvendo-driver-function-hooking/)

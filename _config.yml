@@ -13,8 +13,7 @@ mode: dark # default theme "dark" | "light"
 author:
   name: Higor Carniato # author name
   bio: >- # tell to the world
-    Desenvolvedor C# e C/C++, 
-    apaixonado por programação de baixo nível e tecnologia.
+    Desenvolvedor.
   username: cnthigu # general username
   github: cnthigu # github username
   twitter: cnthigu # twitter username

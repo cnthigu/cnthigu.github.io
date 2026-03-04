@@ -200,6 +200,14 @@ Incluído via `windows.h`, traz:
 
 ---
 
+## Resultado
+
+Usermode abrindo o device e enviando IOCTLs; WinDbg exibindo os logs do driver ao receber cada código:
+
+![Usermode comunicando com driver — WinDbg com logs](/assets/img/screenshot.png)
+
+---
+
 ## Posts relacionados
 
 - [Estudando IOCTL — Criando o driver (Parte 1)](/estudando-ioctl-driver-parte1/)

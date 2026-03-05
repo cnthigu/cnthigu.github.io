@@ -1,5 +1,5 @@
 ---
-title: "Estudando IOCTL Cliente usermode (Parte 2)"
+title: "Estudando IOCTL: Cliente usermode (Parte 2)"
 date: 2026-03-04 15:00:00 -0300
 categories: [Segurança, Kernel Development]
 tags: [ioctl, usermode, driver, windows, c++, comunicação]
@@ -8,9 +8,9 @@ permalink: /estudando-ioctl-usermode-parte2/
 
 ## Introdução
 
-Este post é a continuação de "[Estudando IOCTL  Criando o driver (Parte 1)](/estudando-ioctl-driver-parte1/)", onde criamos o driver kernel com IOCTL_ADD, IOCTL_READ e IOCTL_WRITE. Agora desenvolvemos o **cliente usermode** que abre o device e usa `ReadMemory`/`WriteMemory` para ler e escrever na memória do próprio processo.
+Este post é a continuação de "[Estudando IOCTL: Criando o driver (Parte 1)](/estudando-ioctl-driver-parte1/)", onde criamos o driver kernel com IOCTL_ADD, IOCTL_READ e IOCTL_WRITE. Agora desenvolvemos o **cliente usermode** que abre o device e usa `ReadMemory`/`WriteMemory` para ler e escrever na **memória de outro processo** (notepad.exe).
 
-O foco aqui é explicar **por que** cada parte existe e **como** adaptar para outros cenários (ler outro processo, novos IOCTLs, etc.).
+O foco aqui é explicar **por que** cada parte existe e **como** obter PID e base de módulo de um processo externo. *Código baseado no projeto `krnl-ioctl-demo`.*
 
 > ⚠️ **Aviso**: Este conteúdo é **exclusivamente educacional**. Use apenas em ambientes controlados (VMs) e para fins de aprendizado.
 
@@ -21,15 +21,17 @@ O foco aqui é explicar **por que** cada parte existe e **como** adaptar para ou
 │           USERMODE (user_mode.exe)             │
 ├────────────────────────────────────────────────┤
 │ 1. CreateFileA("\\\\.\\SimpleDriver")          │
-│ 2. ReadMemory(hDevice, pid, addr, size, &out)  │
-│ 3. WriteMemory(hDevice, pid, addr, value, size)│
-│ 4. ReadMemory(...) para confirmar              │
-│ 5. CloseHandle(handle)                         │
+│ 2. GetPidByName("notepad.exe")                │
+│ 3. GetModuleBase(pid, "notepad.exe")           │
+│ 4. ReadMemory(addr = base, 2 bytes) → MZ       │
+│ 5. WriteMemory(addr = base+0xD000, 666)        │
+│ 6. ReadMemory(verify)                          │
+│ 7. CloseHandle(handle)                         │
 └───────────────────┬────────────────────────────┘
                     │
                     ▼
 ┌───────────────────────────────────────────────┐
-│        KERNEL (testeioclt.sys)                │
+│        KERNEL (kernel_mode.sys)               │
 ├───────────────────────────────────────────────┤
 │ IRP_MJ_DEVICE_CONTROL                         │
 │   IOCTL_READ  → MmCopyVirtualMemory (ler)     │
@@ -41,19 +43,19 @@ O foco aqui é explicar **por que** cada parte existe e **como** adaptar para ou
 
 ## headers.h (usermode)
 
-Criamos um header para centralizar os IOCTLs, as structs e as funções `ReadMemory`/`WriteMemory`. Assim o `main.cpp` fica limpo e qualquer alteração (novo IOCTL, nova struct) fica em um só lugar.
+Criamos um header para centralizar os IOCTLs, as structs, `ReadMemory`/`WriteMemory` e as funções auxiliares `GetPidByName` e `GetModuleBase`.
 
-**Por que as structs precisam ser idênticas ao driver?** O `DeviceIoControl` envia bytes; o driver interpreta esses bytes. Se o layout for diferente (ex: um usa `#pragma pack(1)` e o outro não), os offsets dos campos mudam — o driver lê PID, Address, etc. nos lugares errados, o que pode causar **BSOD**. Veja a [explicação detalhada sobre `#pragma pack` na Parte 1](/estudando-ioctl-driver-parte1/#pragma-pack) — por que sem isso pode dar tela azul.
+**Por que as structs precisam ser idênticas ao driver?** O `DeviceIoControl` envia bytes; o driver interpreta esses bytes. Se o layout for diferente (ex: um usa `#pragma pack(1)` e o outro não), os offsets dos campos mudam: o driver lê PID, Address, etc. nos lugares errados, o que pode causar **BSOD**. Veja a [explicação detalhada sobre `#pragma pack` na Parte 1](/estudando-ioctl-driver-parte1/#pragma-pack).
 
-**Por que `ReadMemory` recebe `pOutValue` como ponteiro?** O valor lido vem *do kernel*; a função precisa *escrever* no endereço que o chamador passa. Sem `ULONG_PTR*`, só poderíamos retornar um valor mas `bool` já é o retorno (sucesso/falha). O `*pOutValue` é a forma de devolver o valor lido.
-
-**Por que o mesmo buffer para input e output em `DeviceIoControl`?** Em READ, a struct tem `ProcessId`, `Address`, `Size` (entrada) e `Response` (saída). O driver preenche `Response` e o I/O Manager copia a struct inteira de volta. Usar `&req` nos dois lados economiza alocação e simplifica.
+**GetPidByName e GetModuleBase**: Usam `CreateToolhelp32Snapshot` + `Process32FirstW`/`Process32NextW` e `Module32FirstW`/`Module32NextW` para enumerar processos e módulos. Retornam PID e endereço base do executável ou DLL.
 
 ```cpp
 #pragma once
 #include <iostream>
 #include <windows.h>
 #include <winioctl.h>
+#include <tlhelp32.h>
+#include <stdio.h>
 
 #define IOCTL_ADD   CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_READ  CTL_CODE(FILE_DEVICE_UNKNOWN, 0x802, METHOD_BUFFERED, FILE_ANY_ACCESS)
@@ -107,73 +109,124 @@ bool WriteMemory(HANDLE hDevice, ULONG ProcessId, ULONG_PTR Address, ULONG_PTR V
 	DWORD cbReturned = 0;
 	return DeviceIoControl(hDevice, IOCTL_WRITE, &req, sizeof(req), &req, sizeof(req), &cbReturned, nullptr) != FALSE;
 }
+
+static ULONG GetPidByName(const wchar_t* processName)
+{
+	ULONG pid = 0;
+	HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+	if (hSnapshot == INVALID_HANDLE_VALUE)
+		return 0;
+
+	PROCESSENTRY32W pe = { sizeof(pe) };
+	if (Process32FirstW(hSnapshot, &pe))
+	{
+		do
+		{
+			if (_wcsicmp(pe.szExeFile, processName) == 0)
+			{
+				pid = pe.th32ProcessID;
+				break;
+			}
+		} while (Process32NextW(hSnapshot, &pe));
+	}
+	CloseHandle(hSnapshot);
+	return pid;
+}
+
+static ULONG_PTR GetModuleBase(ULONG pid, const wchar_t* moduleName)
+{
+	ULONG_PTR base = 0;
+	HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
+	if (hSnapshot == INVALID_HANDLE_VALUE)
+		return 0;
+
+	MODULEENTRY32W me = { sizeof(me) };
+	if (Module32FirstW(hSnapshot, &me))
+	{
+		do
+		{
+			if (moduleName == nullptr || _wcsicmp(me.szModule, moduleName) == 0)
+			{
+				base = (ULONG_PTR)me.modBaseAddr;
+				break;
+			}
+		} while (Module32NextW(hSnapshot, &me));
+	}
+	CloseHandle(hSnapshot);
+	return base;
+}
 ```
 
 ---
 
-## main.cpp Fluxo de teste
+## main.cpp: Demo com notepad.exe
 
-O exemplo lê e escreve na **memória do próprio processo** para simplificar: não precisamos encontrar outro PID nem obter endereços de outro executable. Usamos `GetCurrentProcessId()` e `&myInt` (endereço de uma variável local).
+O exemplo usa **notepad.exe** como processo alvo. Abra o Notepad antes de executar. O fluxo:
+1. Obtém o PID com `GetPidByName(L"notepad.exe")`
+2. Obtém o endereço base do executável com `GetModuleBase(pid, L"notepad.exe")`
+3. Lê os 2 primeiros bytes no base (assinatura MZ de PE)
+4. Tenta escrever em `base + 0xD000` (o endereço é arbitrário, só pra demonstração; o WRITE pode falhar)
+5. Lê de novo para confirmar (se a escrita falhou, o valor pode não ser 666)
 
-**Por que `\\.\SimpleDriver`?** O prefixo `\\.\` é usado para abrir devices. O Windows resolve para `\DosDevices\SimpleDriver`, que é o symlink que o driver criou.
-
-**Por que `GENERIC_READ | GENERIC_WRITE`?** `DeviceIoControl` com IOCTLs de leitura/escrita exige essas permissões. Sem elas, a chamada pode falhar com ACCESS_DENIED.
-
-**Como ler outro processo?** Troque `GetCurrentProcessId()` pelo PID do processo alvo (ex: via `CreateToolhelp32Snapshot` + `Process32First`/`Process32Next`) e use o endereço virtual dentro daquele processo (ex: base de uma DLL + offset).
+**Por que base + 0xD000?** É um offset qualquer. Estamos usando endereço fictício só pra mostrar o fluxo; no notepad essa região costuma ser readonly (código). Pode falhar, e está ok: o importante é ver a comunicação funcionando.
 
 ```cpp
 #include "headers.h"
 
 int main()
 {
-	printf("[+] SimpleDriver - User Mode\n");
-	printf("[+] Starting...\n\n");
+	printf("[+] SimpleDriver - Read/Write external process (notepad)\n\n");
 
 	HANDLE hDevice = CreateFileA("\\\\.\\SimpleDriver",
 		GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
 
 	if (hDevice == INVALID_HANDLE_VALUE)
 	{
-		printf("[+] ERROR: CreateFile failed %lu\n", GetLastError());
+		printf("[!] CreateFile failed (%lu). Driver loaded?\n", GetLastError());
 		system("pause");
 		return 1;
 	}
-	printf("[+] Device opened successfully\n\n");
 
-	ULONG pid = GetCurrentProcessId();
-	int myInt = 100;
-	ULONG_PTR addr = (ULONG_PTR)&myInt;
+	ULONG pid = GetPidByName(L"notepad.exe");
+	if (pid == 0)
+	{
+		printf("[!] Run notepad.exe before starting.\n");
+		CloseHandle(hDevice);
+		system("pause");
+		return 1;
+	}
+
+	ULONG_PTR base = GetModuleBase(pid, L"notepad.exe");
+	if (base == 0)
+	{
+		printf("[!] Could not get module base.\n");
+		CloseHandle(hDevice);
+		system("pause");
+		return 1;
+	}
+
+	printf("[+] Target: notepad.exe PID %lu base %p\n", pid, (void*)base);
+
 	ULONG_PTR valueRead = 0;
-
-	printf("[+] ---------- READ ----------\n");
-	if (ReadMemory(hDevice, pid, addr, sizeof(int), &valueRead))
+	if (ReadMemory(hDevice, pid, base, 2, &valueRead))
 	{
-		printf("[+] READ: addr %p = %llu [OK]\n", (void*)addr, (unsigned long long)valueRead);
+		WORD mz = (WORD)valueRead;
+		printf("[+] READ: MZ 0x%04X (%c%c)\n", mz, (char)(mz & 0xFF), (char)(mz >> 8));
 	}
 	else
-	{
-		printf("[+] READ: failed %lu\n", GetLastError());
-	}
+		printf("[!] READ failed %lu\n", GetLastError());
 
-	printf("[+] ---------- WRITE ----------\n");
-	if (WriteMemory(hDevice, pid, addr, 666, sizeof(int)))
-	{
-		printf("[+] WRITE: 666 -> addr %p [OK]\n", (void*)addr);
-	}
+	// base+0xD000 é endereço arbitrário pra demo; WRITE pode falhar
+	ULONG_PTR writeAddr = base + 0xD000;
+	const int testValue = 666;
+	if (WriteMemory(hDevice, pid, writeAddr, testValue, sizeof(int)))
+		printf("[+] WRITE: %d -> %p\n", testValue, (void*)writeAddr);
 	else
-	{
-		printf("[+] WRITE: failed %lu\n", GetLastError());
-	}
+		printf("[!] WRITE failed (addr invalid for notepad, demo only)\n");
 
-	printf("[+] ---------- READ (verify) ----------\n");
-	if (ReadMemory(hDevice, pid, addr, sizeof(int), &valueRead))
-	{
-		printf("[+] READ: addr %p = %llu [OK]\n", (void*)addr, (unsigned long long)valueRead);
-	}
-	else
-	{
-		printf("[+] READ: failed %lu\n", GetLastError());
-	}
+	valueRead = 0;
+	if (ReadMemory(hDevice, pid, writeAddr, sizeof(int), &valueRead))
+		printf("[+] READ verify: %llu\n", (unsigned long long)valueRead);
 
 	CloseHandle(hDevice);
 	printf("\n[+] Done\n");
@@ -184,7 +237,15 @@ int main()
 
 ---
 
-## Parâmetros principais — O que cada um faz
+## GetPidByName e GetModuleBase: O que fazem
+
+**GetPidByName**: `CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)` cria um snapshot de todos os processos. `Process32FirstW`/`Process32NextW` iteram; `_wcsicmp` compara o nome (case insensitive). Retorna `th32ProcessID` do processo encontrado.
+
+**GetModuleBase**: `CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid)` lista os módulos (DLLs e exe) do processo. `Module32FirstW`/`Module32NextW` iteram; `modBaseAddr` é o endereço base. Se `moduleName` for o exe (ex: `notepad.exe`), retorna a base do executável.
+
+---
+
+## Parâmetros principais
 
 ### ReadMemory
 
@@ -206,29 +267,17 @@ int main()
 | Value | ULONG_PTR | Valor a escrever |
 | Size | SIZE_T | Bytes a escrever |
 
-### DeviceIoControl  Parâmetros
-
-```
-DeviceIoControl(
-    hDevice,           // handle do CreateFile
-    IOCTL_READ,        // código que identifica a operação
-    &req, sizeof(req), // buffer de entrada + tamanho
-    &req, sizeof(req), // buffer de saída + tamanho (mesmo buffer = req)
-    &cbReturned,       // a API escreve aqui quantos bytes retornou
-    nullptr            // overlapped = nullptr para chamada síncrona (bloqueia até terminar)
-);
-```
-
-O mesmo buffer `req` é usado para entrada e saída. Em READ, o driver preenche `req.Response`; o I/O Manager copia a struct inteira de volta. O `cbReturned` é preenchido pela API — útil para saber se o driver retornou dados.
-
 ---
 
 ## Fluxo resumido
 
-1. **CreateFile** — Abre `\\.\SimpleDriver` (symlink para `\Device\SimpleDriver`)
-2. **ReadMemory** — Monta `KERNEL_READ_REQUEST`, chama `DeviceIoControl(IOCTL_READ)`, recebe `Response`
-3. **WriteMemory** — Monta `KERNEL_WRITE_REQUEST`, chama `DeviceIoControl(IOCTL_WRITE)`
-4. **CloseHandle** — Fecha o device
+1. **CreateFile**: Abre `\\.\SimpleDriver`
+2. **GetPidByName**: Encontra notepad.exe
+3. **GetModuleBase**: Obtém base do notepad.exe
+4. **ReadMemory**: Lê 2 bytes no base (MZ)
+5. **WriteMemory**: Escreve 666 em base+0xD000 (endereço fake, pode falhar)
+6. **ReadMemory**: Confere o valor escrito
+7. **CloseHandle**: Fecha o device
 
 ---
 
@@ -236,10 +285,10 @@ O mesmo buffer `req` é usado para entrada e saída. Em READ, o driver preenche 
 
 | Objetivo | O que fazer |
 |----------|-------------|
-| Ler outro processo | Use `CreateToolhelp32Snapshot` + `Process32First`/`Process32Next` para obter o PID; passe esse PID em `ReadMemory`/`WriteMemory` |
-| Obter endereço de variável em outro processo | Use pattern scan, base de DLL + offset, ou (em contexto educacional) Cheat Engine para achar o endereço |
-| Novo IOCTL (ex: IOCTL_ADD) | Adicione o `#define` no headers.h (igual ao driver) e chame `DeviceIoControl` com o código e buffers apropriados |
-| Tratar erros | Verifique o retorno de `DeviceIoControl` (BOOL); use `GetLastError()` para códigos de erro detalhados |
+| Outro processo | Troque `L"notepad.exe"` em `GetPidByName` e `GetModuleBase` pelo nome do executável ou DLL |
+| Base de DLL | Use `GetModuleBase(pid, L"kernel32.dll")` para obter a base de uma DLL |
+| Offsets dinâmicos | Use pattern scan ou cheats/engine para encontrar endereços; some ao base |
+| Tratar erros | Verifique retorno de `DeviceIoControl`; use `GetLastError()` para detalhes |
 
 ---
 
@@ -247,10 +296,10 @@ O mesmo buffer `req` é usado para entrada e saída. Em READ, o driver preenche 
 
 Usermode abrindo o device e enviando IOCTLs; WinDbg exibindo os logs do driver:
 
-![Usermode comunicando com driver — WinDbg com logs](/assets/img/screenshot.png)
+![Usermode comunicando com driver: WinDbg com logs](/assets/img/screenshot.png)
 
 ---
 
 ## Posts relacionados
 
-- [Estudando IOCTL — Criando o driver (Parte 1)](/estudando-ioctl-driver-parte1/)
+- [Estudando IOCTL: Criando o driver (Parte 1)](/estudando-ioctl-driver-parte1/)

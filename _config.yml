@@ -61,6 +61,10 @@ jekyll_compose:
 # Homepage limit posts
 number_of_posts: 5
 
+# Incluir posts com data futura (Jekyll exclui por padrão)
+# Útil quando o build (ex: GitHub Pages) roda com data diferente da sua
+future: true
+
 # Build settings
 # theme: klise
 sass:

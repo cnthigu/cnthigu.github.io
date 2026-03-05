@@ -43,7 +43,7 @@ O foco aqui é explicar **por que** cada parte existe e **como** adaptar para ou
 
 Criamos um header para centralizar os IOCTLs, as structs e as funções `ReadMemory`/`WriteMemory`. Assim o `main.cpp` fica limpo e qualquer alteração (novo IOCTL, nova struct) fica em um só lugar.
 
-**Por que as structs precisam ser idênticas ao driver?** O `DeviceIoControl` envia bytes; o driver interpreta esses bytes como `KERNEL_READ_REQUEST` ou `KERNEL_WRITE_REQUEST`. Se o layout for diferente, os campos ficarão desalinhados.
+**Por que as structs precisam ser idênticas ao driver?** O `DeviceIoControl` envia bytes; o driver interpreta esses bytes. Se o layout for diferente (ex: um usa `#pragma pack(1)` e o outro não), os offsets dos campos mudam — o driver lê PID, Address, etc. nos lugares errados, o que pode causar **BSOD**. Veja a [explicação detalhada sobre `#pragma pack` na Parte 1](/estudando-ioctl-driver-parte1/#pragma-pack) — por que sem isso pode dar tela azul.
 
 **Por que `ReadMemory` recebe `pOutValue` como ponteiro?** O valor lido vem *do kernel*; a função precisa *escrever* no endereço que o chamador passa. Sem `ULONG_PTR*`, só poderíamos retornar um valor mas `bool` já é o retorno (sucesso/falha). O `*pOutValue` é a forma de devolver o valor lido.
 
@@ -65,14 +65,14 @@ typedef struct _KERNEL_READ_REQUEST {
 	ULONG_PTR Address;
 	ULONG_PTR Response;
 	SIZE_T Size;
-} KERNEL_READ_REQUEST, *PKERNEL_READ_REQUEST;
+} KERNEL_READ_REQUEST, * PKERNEL_READ_REQUEST;
 
 typedef struct _KERNEL_WRITE_REQUEST {
 	ULONG ProcessId;
 	ULONG_PTR Address;
 	ULONG_PTR Value;
 	SIZE_T Size;
-} KERNEL_WRITE_REQUEST, *PKERNEL_WRITE_REQUEST;
+} KERNEL_WRITE_REQUEST, * PKERNEL_WRITE_REQUEST;
 #pragma pack(pop)
 
 bool ReadMemory(HANDLE hDevice, ULONG ProcessId, ULONG_PTR Address, SIZE_T Size, ULONG_PTR* pOutValue)
@@ -83,10 +83,12 @@ bool ReadMemory(HANDLE hDevice, ULONG ProcessId, ULONG_PTR Address, SIZE_T Size,
 	req.Size = Size;
 
 	DWORD cbReturned = 0;
+
 	BOOL ok = DeviceIoControl(hDevice, IOCTL_READ,
 		&req, sizeof(req),
 		&req, sizeof(req),
-		&cbReturned, nullptr);
+		&cbReturned,
+		nullptr);
 
 	if (ok && pOutValue)
 		*pOutValue = req.Response;
@@ -111,7 +113,7 @@ bool WriteMemory(HANDLE hDevice, ULONG ProcessId, ULONG_PTR Address, ULONG_PTR V
 
 ## main.cpp Fluxo de teste
 
-O exemplo lê e escreve na **memória do próprio processo** para simplificar: não precisamos encontrar outro PID nem obter endereços de outro executable. Usamos `GetCurrentProcessId()` e `&meuInt` (endereço de uma variável local).
+O exemplo lê e escreve na **memória do próprio processo** para simplificar: não precisamos encontrar outro PID nem obter endereços de outro executable. Usamos `GetCurrentProcessId()` e `&myInt` (endereço de uma variável local).
 
 **Por que `\\.\SimpleDriver`?** O prefixo `\\.\` é usado para abrir devices. O Windows resolve para `\DosDevices\SimpleDriver`, que é o symlink que o driver criou.
 
@@ -124,52 +126,57 @@ O exemplo lê e escreve na **memória do próprio processo** para simplificar: n
 
 int main()
 {
-	printf("[+] Iniciando...\n");
+	printf("[+] SimpleDriver - User Mode\n");
+	printf("[+] Starting...\n\n");
 
 	HANDLE hDevice = CreateFileA("\\\\.\\SimpleDriver",
 		GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
 
 	if (hDevice == INVALID_HANDLE_VALUE)
 	{
-		printf("[+] CreateFile FALHOU: %lu\n", GetLastError());
+		printf("[+] ERROR: CreateFile failed %lu\n", GetLastError());
 		system("pause");
 		return 1;
 	}
+	printf("[+] Device opened successfully\n\n");
 
 	ULONG pid = GetCurrentProcessId();
-	int meuInt = 100;
-	ULONG_PTR addr = (ULONG_PTR)&meuInt;
-	ULONG_PTR valorLido = 0;
+	int myInt = 100;
+	ULONG_PTR addr = (ULONG_PTR)&myInt;
+	ULONG_PTR valueRead = 0;
 
-	if (ReadMemory(hDevice, pid, addr, sizeof(int), &valorLido))
+	printf("[+] ---------- READ ----------\n");
+	if (ReadMemory(hDevice, pid, addr, sizeof(int), &valueRead))
 	{
-		printf("[+] Read OK: endereco %p = %llu\n", (void*)addr, (unsigned long long)valorLido);
+		printf("[+] READ: addr %p = %llu [OK]\n", (void*)addr, (unsigned long long)valueRead);
 	}
 	else
 	{
-		printf("[+] Read FALHOU: %lu\n", GetLastError());
+		printf("[+] READ: failed %lu\n", GetLastError());
 	}
 
+	printf("[+] ---------- WRITE ----------\n");
 	if (WriteMemory(hDevice, pid, addr, 666, sizeof(int)))
 	{
-		printf("[+] Write OK: 666 -> endereco %p\n", (void*)addr);
+		printf("[+] WRITE: 666 -> addr %p [OK]\n", (void*)addr);
 	}
 	else
 	{
-		printf("[+] Write FALHOU: %lu\n", GetLastError());
+		printf("[+] WRITE: failed %lu\n", GetLastError());
 	}
 
-	if (ReadMemory(hDevice, pid, addr, sizeof(int), &valorLido))
+	printf("[+] ---------- READ (verify) ----------\n");
+	if (ReadMemory(hDevice, pid, addr, sizeof(int), &valueRead))
 	{
-		printf("[+] Read OK: endereco %p agora = %llu\n", (void*)addr, (unsigned long long)valorLido);
+		printf("[+] READ: addr %p = %llu [OK]\n", (void*)addr, (unsigned long long)valueRead);
 	}
 	else
 	{
-		printf("[+] Read FALHOU: %lu\n", GetLastError());
+		printf("[+] READ: failed %lu\n", GetLastError());
 	}
 
 	CloseHandle(hDevice);
-	printf("[+] Fim\n");
+	printf("\n[+] Done\n");
 	system("pause");
 	return 0;
 }

@@ -51,29 +51,66 @@ O usermode envia um **número** (ex: 0x801) e o driver faz um `switch` para deci
 
 ---
 
-## Estruturas compartilhadas Por que kernel e usermode precisam da mesma struct?
+## Estruturas compartilhadas — Por que kernel e usermode precisam da mesma struct?
 
-O usermode envia bytes no buffer; o kernel recebe esses mesmos bytes. Se o layout for diferente (ex: usermode tem 4 bytes de padding e o kernel não), os campos ficarão desalinhados e o driver lerá dados incorretos. Por isso:
+O usermode envia bytes no buffer; o kernel recebe esses mesmos bytes. Se o layout for diferente, o driver interpreta os bytes nos offsets errados — e isso pode causar **BSOD** (tela azul). Por isso: mesma struct e mesmo packing.
 
-1. **Mesma struct** driver e usermode usam a mesma definição (ou uma cópia idêntica).
-2. **`#pragma pack(push, 1)`** remove padding entre campos. Sem isso, o compilador pode inserir bytes extras para alinhamento, e os offsets mudam.
-(sinceramente n tenho cttz sobre isso ^^, ou quase nd)
+---
+
+## `#pragma pack(push, 1)` — Por que é crítico (e o que acontece se não usar) {: #pragma-pack}
+
+**Onde usamos:** Nas structs `KERNEL_READ_REQUEST` e `KERNEL_WRITE_REQUEST`, tanto no driver quanto no usermode. Sempre rodeadas por `#pragma pack(push, 1)` e `#pragma pack(pop)`.
+
+**O que faz:** O compilador C/C++ insere **padding** (bytes extras) entre os campos das structs para alinhamento. CPUs acessam memória mais rápido quando os dados estão alinhados (ex: um `ULONG_PTR` de 8 bytes em endereço múltiplo de 8). Sem `pack(1)`, o compilador faz isso automaticamente — e o layout da struct muda.
+
+**Exemplo:** Em x64, sem pack:
+```
+KERNEL_READ_REQUEST (sem pack):
+Offset 0:  ProcessId (4 bytes)
+Offset 4:  [4 bytes de PADDING]  ← compilador insere
+Offset 8:  Address (8 bytes)
+Offset 16: Response (8 bytes)
+Offset 24: Size (8 bytes)
+Total: 32 bytes
+```
+
+**Com `pack(1)`:** Nenhum padding. Campos grudados:
+```
+KERNEL_READ_REQUEST (pack 1):
+Offset 0:  ProcessId (4 bytes)
+Offset 4:  Address (8 bytes)
+Offset 12: Response (8 bytes)
+Offset 20: Size (8 bytes)
+Total: 28 bytes
+```
+
+**O problema:** Se o usermode envia 28 bytes (pack 1) e o driver espera 32 bytes (sem pack), ele lê `Address` no offset 8 em vez de 4. O valor lido é lixo ou parte de outro campo. O driver pode:
+
+- Usar um **PID ou endereço inválido** → `PsLookupProcessByProcessId` falha, ou pior
+- Passar endereços **errados** para `MmCopyVirtualMemory` → acessa memória inválida
+- Escrever em **endereços incorretos** → corrupção de memória do kernel
+
+No kernel, acesso a memória inválida ou corrupção costuma resultar em **BSOD**. Por isso o layout **precisa ser idêntico** nos dois lados.
+
+**Resumo:** `#pragma pack(push, 1)` força alinhamento de 1 byte (sem padding). Driver e usermode passam a ver os mesmos bytes nos mesmos offsets. Sem isso, o risco de crash no kernel é alto.
+
+---
 
 ```cpp
 #pragma pack(push, 1)
 typedef struct _KERNEL_READ_REQUEST {
-    ULONG ProcessId;
-    ULONG_PTR Address;
-    ULONG_PTR Response;
-    SIZE_T Size;
-} KERNEL_READ_REQUEST, *PKERNEL_READ_REQUEST;
+	ULONG ProcessId;
+	ULONG_PTR Address;
+	ULONG_PTR Response;
+	SIZE_T Size;
+} KERNEL_READ_REQUEST, * PKERNEL_READ_REQUEST;
 
 typedef struct _KERNEL_WRITE_REQUEST {
-    ULONG ProcessId;
-    ULONG_PTR Address;
-    ULONG_PTR Value;
-    SIZE_T Size;
-} KERNEL_WRITE_REQUEST, *PKERNEL_WRITE_REQUEST;
+	ULONG ProcessId;
+	ULONG_PTR Address;
+	ULONG_PTR Value;
+	SIZE_T Size;
+} KERNEL_WRITE_REQUEST, * PKERNEL_WRITE_REQUEST;
 #pragma pack(pop)
 ```
 
@@ -81,8 +118,7 @@ typedef struct _KERNEL_WRITE_REQUEST {
 
 ## Criando o Driver
 
-Criamos um **headers.h** no projeto do driver para centralizar defines, structs e declarações. Assim o `driver.cpp` fica limpo e qualquer alteração (novo IOCTL, nova struct) fica em um só lugar. 
-obs: isso é uma preferencia minha, se quiser use tudo em um lugar.. ou melhore como quiser.
+Criamos um **headers.h** no projeto do driver para centralizar defines, structs e declarações. Assim o `driver.cpp` fica limpo e qualquer alteração (novo IOCTL, nova struct) fica em um só lugar.
 
 ### 1. headers.h (driver)
 
@@ -104,7 +140,7 @@ obs: isso é uma preferencia minha, se quiser use tudo em um lugar.. ou melhore 
 
 **Structs** Mesmo layout do usermode. `Response` em READ é preenchido pelo driver; o I/O Manager copia a struct de volta.
 
-**ReadProcessMemory / WriteProcessMemory** São nossas funções auxiliares (implementadas no .cpp ou no próprio header). Encapsulam a chamada a `MmCopyVirtualMemory` com os parâmetros na ordem correta (origem → destino).
+**ReadProcessMemory / WriteProcessMemory** São nossas funções auxiliares, implementadas em `headers.h`. Encapsulam a chamada a `MmCopyVirtualMemory` com os parâmetros na ordem correta (origem → destino).
 
 ```cpp
 #pragma once
@@ -120,40 +156,65 @@ obs: isso é uma preferencia minha, se quiser use tudo em um lugar.. ou melhore 
 #define SYMLINK_NAME L"\\DosDevices\\SimpleDriver"
 
 extern "C" NTKERNELAPI NTSTATUS IoCreateDriver(
-    _In_opt_ PUNICODE_STRING DriverName,
-    _In_ PDRIVER_INITIALIZE InitializationFunction);
+	_In_opt_ PUNICODE_STRING DriverName,
+	_In_ PDRIVER_INITIALIZE InitializationFunction);
 
 extern "C" NTKERNELAPI NTSTATUS PsLookupProcessByProcessId(
-    _In_ HANDLE ProcessId,
-    _Outptr_ PEPROCESS* Process);
+	_In_ HANDLE ProcessId,
+	_Outptr_ PEPROCESS* Process);
 
 extern "C" NTSTATUS NTAPI MmCopyVirtualMemory(
-    PEPROCESS SourceProcess,
-    PVOID SourceAddress,
-    PEPROCESS TargetProcess,
-    PVOID TargetAddress,
-    SIZE_T BufferSize,
-    KPROCESSOR_MODE PreviousMode,
-    PSIZE_T ReturnSize);
+	PEPROCESS SourceProcess,
+	PVOID SourceAddress,
+	PEPROCESS TargetProcess,
+	PVOID TargetAddress,
+	SIZE_T BufferSize,
+	KPROCESSOR_MODE PreviousMode,
+	PSIZE_T ReturnSize);
 
 #pragma pack(push, 1)
 typedef struct _KERNEL_READ_REQUEST {
-    ULONG ProcessId;
-    ULONG_PTR Address;
-    ULONG_PTR Response;
-    SIZE_T Size;
-} KERNEL_READ_REQUEST, *PKERNEL_READ_REQUEST;
+	ULONG ProcessId;
+	ULONG_PTR Address;
+	ULONG_PTR Response;
+	SIZE_T Size;
+} KERNEL_READ_REQUEST, * PKERNEL_READ_REQUEST;
 
 typedef struct _KERNEL_WRITE_REQUEST {
-    ULONG ProcessId;
-    ULONG_PTR Address;
-    ULONG_PTR Value;
-    SIZE_T Size;
-} KERNEL_WRITE_REQUEST, *PKERNEL_WRITE_REQUEST;
+	ULONG ProcessId;
+	ULONG_PTR Address;
+	ULONG_PTR Value;
+	SIZE_T Size;
+} KERNEL_WRITE_REQUEST, * PKERNEL_WRITE_REQUEST;
 #pragma pack(pop)
 
-NTSTATUS ReadProcessMemory(PEPROCESS Process, PVOID SourceAddress, PVOID TargetAddress, SIZE_T Size);
-NTSTATUS WriteProcessMemory(PEPROCESS Process, PVOID SourceAddress, PVOID TargetAddress, SIZE_T Size);
+NTSTATUS ReadProcessMemory(PEPROCESS Process, PVOID SourceAddress, PVOID TargetAddress, SIZE_T Size)
+{
+	PEPROCESS SourceProcess = Process;
+	PEPROCESS TargetProcess = PsGetCurrentProcess();
+	SIZE_T BytesWritten = 0;
+
+	NTSTATUS status = MmCopyVirtualMemory(
+		SourceProcess, SourceAddress,
+		TargetProcess, TargetAddress,
+		Size, KernelMode, &BytesWritten);
+
+	return status;
+}
+
+NTSTATUS WriteProcessMemory(PEPROCESS Process, PVOID SourceAddress, PVOID TargetAddress, SIZE_T Size)
+{
+	PEPROCESS SourceProcess = PsGetCurrentProcess();
+	PEPROCESS TargetProcess = Process;
+	SIZE_T BytesWritten = 0;
+
+	NTSTATUS status = MmCopyVirtualMemory(
+		SourceProcess, SourceAddress,
+		TargetProcess, TargetAddress,
+		Size, KernelMode, &BytesWritten);
+
+	return status;
+}
 ```
 
 ### 2. CreateClose
@@ -183,18 +244,20 @@ IOCTL_ADD é bom para entender o fluxo: o usermode envia um `int`, o driver soma
 ```cpp
 case IOCTL_ADD:
 {
-    if (cbInputBufferLength >= sizeof(int) && cbOutputBufferLength >= sizeof(int) && pSystemBuffer != NULL)
-    {
-        int* pValue = (int*)pSystemBuffer;
-        *pValue = *pValue + 1;
-        cbBytesReturned = sizeof(int);
-        status = STATUS_SUCCESS;
-    }
-    else
-    {
-        status = STATUS_BUFFER_TOO_SMALL;
-    }
-    break;
+	if (cbInputBufferLength >= sizeof(int) && cbOutputBufferLength >= sizeof(int) && pSystemBuffer != NULL)
+	{
+		int* pValue = (int*)pSystemBuffer;
+		int valueBefore = *pValue;
+		*pValue = *pValue + 1;
+		cbBytesReturned = sizeof(int);
+		status = STATUS_SUCCESS;
+		DbgPrint("[+] IOCTL_ADD: %d + 1 = %d [OK]\n", valueBefore, *pValue);
+	}
+	else
+	{
+		status = STATUS_BUFFER_TOO_SMALL;
+	}
+	break;
 }
 ```
 
@@ -285,20 +348,30 @@ case IOCTL_WRITE:
 ```cpp
 NTSTATUS ReadProcessMemory(PEPROCESS Process, PVOID SourceAddress, PVOID TargetAddress, SIZE_T Size)
 {
-    SIZE_T BytesWritten = 0;
-    return MmCopyVirtualMemory(
-        Process, SourceAddress,
-        PsGetCurrentProcess(), TargetAddress,
-        Size, KernelMode, &BytesWritten);
+	PEPROCESS SourceProcess = Process;
+	PEPROCESS TargetProcess = PsGetCurrentProcess();
+	SIZE_T BytesWritten = 0;
+
+	NTSTATUS status = MmCopyVirtualMemory(
+		SourceProcess, SourceAddress,
+		TargetProcess, TargetAddress,
+		Size, KernelMode, &BytesWritten);
+
+	return status;
 }
 
 NTSTATUS WriteProcessMemory(PEPROCESS Process, PVOID SourceAddress, PVOID TargetAddress, SIZE_T Size)
 {
-    SIZE_T BytesWritten = 0;
-    return MmCopyVirtualMemory(
-        PsGetCurrentProcess(), SourceAddress,
-        Process, TargetAddress,
-        Size, KernelMode, &BytesWritten);
+	PEPROCESS SourceProcess = PsGetCurrentProcess();
+	PEPROCESS TargetProcess = Process;
+	SIZE_T BytesWritten = 0;
+
+	NTSTATUS status = MmCopyVirtualMemory(
+		SourceProcess, SourceAddress,
+		TargetProcess, TargetAddress,
+		Size, KernelMode, &BytesWritten);
+
+	return status;
 }
 ```
 
@@ -446,9 +519,12 @@ return status;
 NTSTATUS CreateClose(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 {
 	UNREFERENCED_PARAMETER(DeviceObject);
+
+	DbgPrint("[+] CreateClose: device open/close\n");
 	Irp->IoStatus.Status = STATUS_SUCCESS;
 	Irp->IoStatus.Information = 0;
 	IoCompleteRequest(Irp, IO_NO_INCREMENT);
+
 	return STATUS_SUCCESS;
 }
 
@@ -458,9 +534,12 @@ NTSTATUS DeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 
 	PIO_STACK_LOCATION pIrpStack = IoGetCurrentIrpStackLocation(Irp);
 	PVOID pSystemBuffer = Irp->AssociatedIrp.SystemBuffer;
+
 	ULONG cbInputBufferLength = pIrpStack->Parameters.DeviceIoControl.InputBufferLength;
 	ULONG cbOutputBufferLength = pIrpStack->Parameters.DeviceIoControl.OutputBufferLength;
 	ULONG IoControlCode = pIrpStack->Parameters.DeviceIoControl.IoControlCode;
+
+	DbgPrint("[+] DeviceControl: code=0x%08X in=%u out=%u\n", IoControlCode, cbInputBufferLength, cbOutputBufferLength);
 
 	NTSTATUS status = STATUS_INVALID_DEVICE_REQUEST;
 	ULONG cbBytesReturned = 0;
@@ -469,31 +548,45 @@ NTSTATUS DeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 	{
 	case IOCTL_ADD:
 	{
+		DbgPrint("[+] IOCTL_ADD: received\n");
 		if (cbInputBufferLength >= sizeof(int) && cbOutputBufferLength >= sizeof(int) && pSystemBuffer != NULL)
 		{
 			int* pValue = (int*)pSystemBuffer;
+			int valueBefore = *pValue;
+
 			*pValue = *pValue + 1;
+
 			cbBytesReturned = sizeof(int);
 			status = STATUS_SUCCESS;
+			DbgPrint("[+] IOCTL_ADD: %d + 1 = %d [OK]\n", valueBefore, *pValue);
 		}
 		else
 		{
 			status = STATUS_BUFFER_TOO_SMALL;
+			DbgPrint("[+] IOCTL_ADD: buffer too small\n");
 		}
 		break;
 	}
 
 	case IOCTL_READ:
 	{
+		DbgPrint("[+] ---------- READ ----------\n");
 		if (cbInputBufferLength >= sizeof(KERNEL_READ_REQUEST) && cbOutputBufferLength >= sizeof(KERNEL_READ_REQUEST) && pSystemBuffer != NULL)
 		{
 			PKERNEL_READ_REQUEST ReadRequest = (PKERNEL_READ_REQUEST)pSystemBuffer;
 			PEPROCESS Process = NULL;
 
+			DbgPrint("[+] READ: PID=%lu addr=%p size=%llu\n", ReadRequest->ProcessId, (void*)ReadRequest->Address, (unsigned long long)ReadRequest->Size);
+
 			status = PsLookupProcessByProcessId((HANDLE)(ULONG_PTR)ReadRequest->ProcessId, &Process);
 
 			if (!NT_SUCCESS(status))
+			{
+				DbgPrint("[+] READ: PsLookupProcessByProcessId failed 0x%08X\n", status);
 				break;
+			}
+
+			DbgPrint("[+] READ: process found\n");
 
 			status = ReadProcessMemory(Process,
 				(PVOID)ReadRequest->Address,
@@ -505,26 +598,38 @@ NTSTATUS DeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 			if (NT_SUCCESS(status))
 			{
 				cbBytesReturned = sizeof(KERNEL_READ_REQUEST);
+				DbgPrint("[+] READ: value=%llu [OK]\n", (unsigned long long)ReadRequest->Response);
+			}
+			else
+			{
+				DbgPrint("[+] READ: MmCopyVirtualMemory failed 0x%08X\n", status);
 			}
 		}
 		else
 		{
 			status = STATUS_BUFFER_TOO_SMALL;
+			DbgPrint("[+] READ: buffer too small\n");
 		}
 		break;
 	}
 
 	case IOCTL_WRITE:
 	{
+		DbgPrint("[+] ---------- WRITE ----------\n");
 		if (cbInputBufferLength >= sizeof(KERNEL_WRITE_REQUEST) && cbOutputBufferLength >= sizeof(KERNEL_WRITE_REQUEST) && pSystemBuffer != NULL)
 		{
 			PKERNEL_WRITE_REQUEST WriteRequest = (PKERNEL_WRITE_REQUEST)pSystemBuffer;
 			PEPROCESS Process = NULL;
 
-			status = PsLookupProcessByProcessId((HANDLE)(ULONG_PTR)WriteRequest->ProcessId, &Process);
+			DbgPrint("[+] WRITE: PID=%lu addr=%p value=%llu size=%llu\n",
+				WriteRequest->ProcessId, (void*)WriteRequest->Address, (unsigned long long)WriteRequest->Value, (unsigned long long)WriteRequest->Size);
 
+			status = PsLookupProcessByProcessId((HANDLE)(ULONG_PTR)WriteRequest->ProcessId, &Process);
 			if (!NT_SUCCESS(status))
+			{
+				DbgPrint("[+] WRITE: PsLookupProcessByProcessId failed 0x%08X\n", status);
 				break;
+			}
 
 			status = WriteProcessMemory(Process,
 				(PVOID)&WriteRequest->Value,
@@ -536,20 +641,28 @@ NTSTATUS DeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 			if (NT_SUCCESS(status))
 			{
 				cbBytesReturned = sizeof(KERNEL_WRITE_REQUEST);
+				DbgPrint("[+] WRITE: %llu bytes copied [OK]\n", (unsigned long long)WriteRequest->Size);
+			}
+			else
+			{
+				DbgPrint("[+] WRITE: MmCopyVirtualMemory failed 0x%08X\n", status);
 			}
 		}
 		else
 		{
 			status = STATUS_BUFFER_TOO_SMALL;
+			DbgPrint("[+] WRITE: buffer too small\n");
 		}
 		break;
 	}
 
 	default:
+		DbgPrint("[+] DeviceControl: unknown IOCTL 0x%08X\n", IoControlCode);
 		status = STATUS_INVALID_DEVICE_REQUEST;
 		break;
 	}
 
+	DbgPrint("[+] DeviceControl: done status=0x%08X bytes=%u\n", status, cbBytesReturned);
 	Irp->IoStatus.Status = status;
 	Irp->IoStatus.Information = cbBytesReturned;
 	IoCompleteRequest(Irp, IO_NO_INCREMENT);
@@ -566,6 +679,8 @@ VOID UnloadDriver(PDRIVER_OBJECT DriverObject)
 	{
 		IoDeleteDevice(DriverObject->DeviceObject);
 	}
+
+	DbgPrint("[+] UnloadDriver: symlink and device removed\n");
 }
 
 NTSTATUS DriverInitialize(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
@@ -600,6 +715,8 @@ NTSTATUS DriverInitialize(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryP
 	pDevice->Flags |= DO_BUFFERED_IO;
 	pDevice->Flags &= ~DO_DEVICE_INITIALIZING;
 
+	DbgPrint("[+] DriverInitialize: device and symlink created\n");
+
 	return STATUS_SUCCESS;
 }
 
@@ -608,10 +725,13 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 {
 	if (!DriverObject)
 	{
+		DbgPrint("[+] DriverEntry: IoCreateDriver path\n");
 		UNICODE_STRING driverName;
 		RtlInitUnicodeString(&driverName, L"\\Driver\\SimpleDriver");
 		return IoCreateDriver(&driverName, &DriverInitialize);
 	}
+
+	DbgPrint("[+] DriverEntry: starting\n");
 	return DriverInitialize(DriverObject, RegistryPath);
 }
 ```

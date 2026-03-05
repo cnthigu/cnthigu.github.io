@@ -8,140 +8,305 @@ permalink: /estudando-ioctl-driver-parte1/
 
 ## Introdução
 
-Anotações de estudo sobre **IOCTL** (Input/Output Control) A forma oficial e documentada do Windows para comunicação entre aplicações usermode e drivers kernel. Nesta **Parte 1** focamos no **driver kernel**: criar o device, receber códigos IOCTL (0x801–0x804) e responder às requisições.
+Anotações de estudo sobre **IOCTL** (Input/Output Control) — A forma oficial e documentada do Windows para comunicação entre aplicações usermode e drivers kernel. Nesta **Parte 1** focamos no **driver kernel**: criar o device, receber códigos IOCTL e implementar operações de ADD, READ e WRITE de memória.
 
-> **Aviso**: Este conteúdo é **exclusivamente educacional** para fins de aprendizado.
+O objetivo aqui não é só mostrar o código, mas explicar **por que** cada parte existe e **como** adaptar para outros casos.
+
+> ⚠️ **Aviso**: Este conteúdo é **exclusivamente educacional**. Use apenas em ambientes controlados (VMs) e para fins de aprendizado.
 
 ## O que é IOCTL?
 
-**IOCTL** permite que um programa usermode envie "comandos" para um driver kernel através de um código numérico. Cada código representa uma operação diferente (ex: 0x801 = soma, 0x802 = subtração). O driver recebe o código e executa a lógica correspondente.
+**IOCTL** permite que um programa usermode envie comandos para um driver kernel através de um código numérico. Cada código representa uma operação: 0x801 = ADD (soma 1), 0x802 = READ (ler memória de processo), 0x803 = WRITE (escrever memória em processo).
 
 ### Fluxo resumido
 
 ```
-Usermode                          Kernel
-    |                                |
-    |  CreateFile("\\\\.\\SimpleDriver")  →  IRP_MJ_CREATE
-    |                                |
-    |  DeviceIoControl(IOCTL_ADD, ...)    →  IRP_MJ_DEVICE_CONTROL
-    |                                |      switch(0x801) → executa ADD
-    |  ← resultado no buffer         |
-    |                                |
-    |  CloseHandle()                 →  IRP_MJ_CLOSE
+Usermode                                  Kernel
+    |                                       |
+    |  CreateFile("\\\\.\\SimpleDriver")    →  IRP_MJ_CREATE
+    |                                       |
+    |  DeviceIoControl(IOCTL_READ, struct)  →  IRP_MJ_DEVICE_CONTROL
+    |                                       |  MmCopyVirtualMemory (ler processo)
+    |  ← struct com Response preenchido     |
+    |                                       |
+    |  CloseHandle()                        →  IRP_MJ_CLOSE
 ```
 
 ---
 
-## Códigos IOCTL: A macro CTL_CODE e a faixa 0x800
+## Códigos IOCTL:  Por que precisamos deles?
 
-Os códigos que nosso driver recebe são definidos pela macro `CTL_CODE`:
+O usermode envia um **número** (ex: 0x801) e o driver faz um `switch` para decidir o que fazer. Sem esse código, o driver não saberia se deve somar, ler ou escrever. A macro `CTL_CODE` gera um valor único que combina vários campos; o importante é que **driver e usermode usem exatamente as mesmas definições**.
 
-```cpp
-#define CTL_CODE(DeviceType, Function, Method, Access)
+### Parâmetros CTL_CODE
 
-#define IOCTL_ADD CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
-```
+| Parâmetro | Valor | Significado |
+|-----------|-------|-------------|
+| DeviceType | `FILE_DEVICE_UNKNOWN` | Device genérico (não é disco, teclado, etc.) |
+| Function | `0x801`–`0x803` | Código da operação. 0x800–0xFFF = faixa para drivers customizados |
+| Method | `METHOD_BUFFERED` | Kernel copia buffer user ↔ kernel (mais seguro) |
+| Access | `FILE_ANY_ACCESS` | Qualquer nível de acesso |
 
-### Parâmetros
-
-| Parâmetro | Nosso valor | Significado |
-|-----------|-------------|-------------|
-| DeviceType | `FILE_DEVICE_UNKNOWN` (0x22) | Tipo de device; UNKNOWN = device genérico |
-| Function | `0x801`, `0x802`, etc. | Código da operação (0x800–0xFFF = custom) |
-| Method | `METHOD_BUFFERED` | Como dados in/out são transferidos |
-| Access | `FILE_ANY_ACCESS` | Nível de acesso (qualquer) |
-
-### Faixa 0x800
-
-Os **function codes** entre **0x800** e **0xFFF** são reservados para drivers customizados. A Microsoft usa a faixa 0x000 - 0x7FF. Por isso usamos 0x801, 0x802, 0x803, 0x804 são códigos "nos nossos".
-
-### Nossos códigos
-
-| Define | Function | Operação |
-|--------|----------|----------|
-| IOCTL_ADD | 0x801 | Soma |
-| IOCTL_SUB | 0x802 | Subtração |
-| IOCTL_MUL | 0x803 | Multiplicação |
-| IOCTL_DIV | 0x804 | Divisão |
+**Como adicionar outro IOCTL?** Defina um novo `#define` com outro Function (ex: 0x804) e um novo `case` no switch do `DeviceControl`.
 
 ---
 
-## Criando o Driver — Passo a Passo
+## Estruturas compartilhadas Por que kernel e usermode precisam da mesma struct?
 
-### 1. Definições e Device/Symlink
+O usermode envia bytes no buffer; o kernel recebe esses mesmos bytes. Se o layout for diferente (ex: usermode tem 4 bytes de padding e o kernel não), os campos ficarão desalinhados e o driver lerá dados incorretos. Por isso:
+
+1. **Mesma struct** driver e usermode usam a mesma definição (ou uma cópia idêntica).
+2. **`#pragma pack(push, 1)`** remove padding entre campos. Sem isso, o compilador pode inserir bytes extras para alinhamento, e os offsets mudam.
+(sinceramente n tenho cttz sobre isso ^^, ou quase nd)
 
 ```cpp
-#define IOCTL_ADD CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_SUB CTL_CODE(FILE_DEVICE_UNKNOWN, 0x802, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_MUL CTL_CODE(FILE_DEVICE_UNKNOWN, 0x803, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_DIV CTL_CODE(FILE_DEVICE_UNKNOWN, 0x804, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#pragma pack(push, 1)
+typedef struct _KERNEL_READ_REQUEST {
+    ULONG ProcessId;
+    ULONG_PTR Address;
+    ULONG_PTR Response;
+    SIZE_T Size;
+} KERNEL_READ_REQUEST, *PKERNEL_READ_REQUEST;
 
-#define DEVICE_NAME L"\\Device\\SimpleDriver"
+typedef struct _KERNEL_WRITE_REQUEST {
+    ULONG ProcessId;
+    ULONG_PTR Address;
+    ULONG_PTR Value;
+    SIZE_T Size;
+} KERNEL_WRITE_REQUEST, *PKERNEL_WRITE_REQUEST;
+#pragma pack(pop)
+```
+
+---
+
+## Criando o Driver
+
+Criamos um **headers.h** no projeto do driver para centralizar defines, structs e declarações. Assim o `driver.cpp` fica limpo e qualquer alteração (novo IOCTL, nova struct) fica em um só lugar. 
+obs: isso é uma preferencia minha, se quiser use tudo em um lugar.. ou melhore como quiser.
+
+### 1. headers.h (driver)
+
+**Por que um header separado?** Centraliza defines e declarações. O `driver.cpp` só inclui `headers.h` e tem acesso a tudo. Se adicionar um novo IOCTL, muda em um lugar só.
+
+**`#pragma once`** Evita que o header seja incluído mais de uma vez (problema de redefinição).
+
+**`#include <ntddk.h>` e `<wdm.h>`** Headers do WDK (Windows Driver Kit). Trazem `NTSTATUS`, `PIRP`, `PDEVICE_OBJECT`, `IoCreateDevice`, etc.
+
+**IOCTLs e nomes do device** Os defines precisam ser **idênticos** ao usermode. O `L"..."` indica string Unicode (wide string) exigida pelas APIs do kernel.
+
+**Declarações `extern "C"`** Essas funções não vêm dos nossos .cpp; elas estão em `ntoskrnl.exe`. Declaramos para o linker encontrar. O `extern "C"` evita *name mangling* do C++ (o nome da função no binário fica exato: `IoCreateDriver`, `PsLookupProcessByProcessId`, etc.).
+
+| Declaração | Onde está | Para que serve |
+|------------|-----------|----------------|
+| `IoCreateDriver` | ntoskrnl | Usada quando o driver é carregado por manual mapper (DriverObject == NULL). Cria o driver “por baixo dos panos”. |
+| `PsLookupProcessByProcessId` | ntoskrnl | Converte PID em ponteiro `PEPROCESS`. Precisamos disso para acessar a memória de outro processo. |
+| `MmCopyVirtualMemory` | ntoskrnl | **Não documentada.** Copia bytes entre espaços de memória de processos. Usada para Read/Write de memória. |
+
+**Structs** Mesmo layout do usermode. `Response` em READ é preenchido pelo driver; o I/O Manager copia a struct de volta.
+
+**ReadProcessMemory / WriteProcessMemory** São nossas funções auxiliares (implementadas no .cpp ou no próprio header). Encapsulam a chamada a `MmCopyVirtualMemory` com os parâmetros na ordem correta (origem → destino).
+
+```cpp
+#pragma once
+
+#include <ntddk.h>
+#include <wdm.h>
+
+#define IOCTL_ADD   CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_READ  CTL_CODE(FILE_DEVICE_UNKNOWN, 0x802, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_WRITE CTL_CODE(FILE_DEVICE_UNKNOWN, 0x803, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+#define DEVICE_NAME  L"\\Device\\SimpleDriver"
 #define SYMLINK_NAME L"\\DosDevices\\SimpleDriver"
+
+extern "C" NTKERNELAPI NTSTATUS IoCreateDriver(
+    _In_opt_ PUNICODE_STRING DriverName,
+    _In_ PDRIVER_INITIALIZE InitializationFunction);
+
+extern "C" NTKERNELAPI NTSTATUS PsLookupProcessByProcessId(
+    _In_ HANDLE ProcessId,
+    _Outptr_ PEPROCESS* Process);
+
+extern "C" NTSTATUS NTAPI MmCopyVirtualMemory(
+    PEPROCESS SourceProcess,
+    PVOID SourceAddress,
+    PEPROCESS TargetProcess,
+    PVOID TargetAddress,
+    SIZE_T BufferSize,
+    KPROCESSOR_MODE PreviousMode,
+    PSIZE_T ReturnSize);
+
+#pragma pack(push, 1)
+typedef struct _KERNEL_READ_REQUEST {
+    ULONG ProcessId;
+    ULONG_PTR Address;
+    ULONG_PTR Response;
+    SIZE_T Size;
+} KERNEL_READ_REQUEST, *PKERNEL_READ_REQUEST;
+
+typedef struct _KERNEL_WRITE_REQUEST {
+    ULONG ProcessId;
+    ULONG_PTR Address;
+    ULONG_PTR Value;
+    SIZE_T Size;
+} KERNEL_WRITE_REQUEST, *PKERNEL_WRITE_REQUEST;
+#pragma pack(pop)
+
+NTSTATUS ReadProcessMemory(PEPROCESS Process, PVOID SourceAddress, PVOID TargetAddress, SIZE_T Size);
+NTSTATUS WriteProcessMemory(PEPROCESS Process, PVOID SourceAddress, PVOID TargetAddress, SIZE_T Size);
 ```
 
-- **Device**: `\Device\SimpleDriver` = nome interno no kernel
-- **Symlink**: `\DosDevices\SimpleDriver` = permite ao usermode abrir via `\\.\SimpleDriver`
+### 2. CreateClose
 
-### 2. Create/Close — Abertura e fechamento de handle
+O kernel dispara `IRP_MJ_CREATE` quando o usermode chama `CreateFile`, e `IRP_MJ_CLOSE` quando chama `CloseHandle`. Em muitos drivers simples, não precisamos fazer nada especial: só retornar sucesso. Por isso usamos a **mesma função** para os dois evita duplicar código.
+
+**O que faz cada linha:**
+- `Irp->IoStatus.Status = STATUS_SUCCESS` Indica que a operação deu certo.
+- `Irp->IoStatus.Information = 0` Nenhum byte de retorno (não é leitura/escrita).
+- `IoCompleteRequest` **Obrigatório.** Sinaliza ao I/O Manager que terminamos. Sem isso, o usermode fica esperando para sempre.
 
 ```cpp
 NTSTATUS CreateClose(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 {
     UNREFERENCED_PARAMETER(DeviceObject);
-
     Irp->IoStatus.Status = STATUS_SUCCESS;
     Irp->IoStatus.Information = 0;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
-
     return STATUS_SUCCESS;
 }
 ```
 
-Tanto `CreateFile` quanto `CloseHandle` do usermode disparam IRPs que vão para a mesma função. Só retornamos sucesso.
+### 3. DeviceControl IOCTL_ADD (o caso mais simples)
 
-### 3. DeviceControl — Onde os IOCTLs são processados
+IOCTL_ADD é bom para entender o fluxo: o usermode envia um `int`, o driver soma 1 e devolve no mesmo buffer. Com `METHOD_BUFFERED`, o I/O Manager já copiou os bytes para `pSystemBuffer`. Fazemos um cast para `int*`, modificamos o valor, e informamos quantos bytes retornar (`cbBytesReturned`). O I/O Manager copia de volta para o buffer do usermode.
 
 ```cpp
-NTSTATUS DeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
+case IOCTL_ADD:
 {
-    UNREFERENCED_PARAMETER(DeviceObject);
-
-    PIO_STACK_LOCATION stack = IoGetCurrentIrpStackLocation(Irp);
-
-    NTSTATUS status = STATUS_INVALID_DEVICE_REQUEST;
-    ULONG bytes = 0;
-
-    switch (stack->Parameters.DeviceIoControl.IoControlCode)
+    if (cbInputBufferLength >= sizeof(int) && cbOutputBufferLength >= sizeof(int) && pSystemBuffer != NULL)
     {
-    case IOCTL_ADD:
-        DbgPrint("[+] IOCTL_ADD received\n");
-        break;
-    case IOCTL_SUB:
-        DbgPrint("[+] IOCTL_SUB received\n");
-        break;
-    case IOCTL_MUL:
-        DbgPrint("[+] IOCTL_MUL received\n");
-        break;
-    case IOCTL_DIV:
-        DbgPrint("[+] IOCTL_DIV received\n");
-        break;
-    default:
-        break;
+        int* pValue = (int*)pSystemBuffer;
+        *pValue = *pValue + 1;
+        cbBytesReturned = sizeof(int);
+        status = STATUS_SUCCESS;
     }
-
-    Irp->IoStatus.Status = status;
-    Irp->IoStatus.Information = bytes;
-    IoCompleteRequest(Irp, IO_NO_INCREMENT);
-    return status;
+    else
+    {
+        status = STATUS_BUFFER_TOO_SMALL;
+    }
+    break;
 }
 ```
 
-- `IoGetCurrentIrpStackLocation` : pega a pilha do IRP atual
-- `IoControlCode` : valor enviado pelo usermode (0x801, 0x802, etc.)
-- `IoCompleteRequest` : finaliza o IRP (obrigatório)
+### 4. DeviceControl IOCTL_READ (ler memória de outro processo)
 
-### 4. UnloadDriver — Limpeza ao descarregar
+O usermode envia `KERNEL_READ_REQUEST` com `ProcessId`, `Address` e `Size`. O driver:
+1. Obtém o `PEPROCESS` do processo alvo com `PsLookupProcessByProcessId`.
+2. Chama `ReadProcessMemory` (que usa `MmCopyVirtualMemory`) para copiar bytes do processo alvo para o campo `Response` da nossa struct.
+3. Chama `ObfDereferenceObject(Process)` **importante** para evitar leak de referência.
+4. Define `cbBytesReturned = sizeof(KERNEL_READ_REQUEST)` para o I/O Manager copiar a struct inteira (com `Response` preenchido) de volta.
+
+```cpp
+case IOCTL_READ:
+{
+    if (cbInputBufferLength >= sizeof(KERNEL_READ_REQUEST) && cbOutputBufferLength >= sizeof(KERNEL_READ_REQUEST) && pSystemBuffer != NULL)
+    {
+        PKERNEL_READ_REQUEST ReadRequest = (PKERNEL_READ_REQUEST)pSystemBuffer;
+        PEPROCESS Process = NULL;
+
+        status = PsLookupProcessByProcessId((HANDLE)(ULONG_PTR)ReadRequest->ProcessId, &Process);
+
+        if (NT_SUCCESS(status))
+        {
+            status = ReadProcessMemory(Process,
+                (PVOID)ReadRequest->Address,
+                (PVOID)&ReadRequest->Response,
+                ReadRequest->Size);
+
+            ObfDereferenceObject(Process);
+
+            if (NT_SUCCESS(status))
+            {
+                cbBytesReturned = sizeof(KERNEL_READ_REQUEST);
+            }
+        }
+    }
+    else
+    {
+        status = STATUS_BUFFER_TOO_SMALL;
+    }
+    break;
+}
+```
+
+### 5. DeviceControl IOCTL_WRITE (escrever memória em outro processo)
+
+Similar ao READ, mas o fluxo é invertido: copiamos *de* nosso buffer (onde está `Value`) *para* o endereço `Address` no processo alvo. `WriteProcessMemory` usa `MmCopyVirtualMemory` com origem = nosso processo, destino = processo alvo.
+
+```cpp
+case IOCTL_WRITE:
+{
+    if (cbInputBufferLength >= sizeof(KERNEL_WRITE_REQUEST) && cbOutputBufferLength >= sizeof(KERNEL_WRITE_REQUEST) && pSystemBuffer != NULL)
+    {
+        PKERNEL_WRITE_REQUEST WriteRequest = (PKERNEL_WRITE_REQUEST)pSystemBuffer;
+        PEPROCESS Process = NULL;
+
+        status = PsLookupProcessByProcessId((HANDLE)(ULONG_PTR)WriteRequest->ProcessId, &Process);
+
+        if (NT_SUCCESS(status))
+        {
+            status = WriteProcessMemory(Process,
+                (PVOID)&WriteRequest->Value,
+                (PVOID)WriteRequest->Address,
+                WriteRequest->Size);
+
+            ObfDereferenceObject(Process);
+
+            if (NT_SUCCESS(status))
+            {
+                cbBytesReturned = sizeof(KERNEL_WRITE_REQUEST);
+            }
+        }
+    }
+    else
+    {
+        status = STATUS_BUFFER_TOO_SMALL;
+    }
+    break;
+}
+```
+
+### 6. ReadProcessMemory e WriteProcessMemory Encapsulando MmCopyVirtualMemory
+
+`MmCopyVirtualMemory` é a API de baixo nível. Ela recebe: processo origem, endereço origem, processo destino, endereço destino, tamanho. Para **Read**: origem = processo alvo, destino = nosso (driver). Para **Write**: origem = nosso, destino = processo alvo. Criar essas funções auxiliares deixa o `DeviceControl` mais legível.
+
+**Por que `PsGetCurrentProcess()`?** O driver roda no contexto do kernel; `PsGetCurrentProcess()` retorna o "processo" do kernel (ou do sistema). Usamos como processo de origem/destino quando os dados estão no nosso lado.
+
+```cpp
+NTSTATUS ReadProcessMemory(PEPROCESS Process, PVOID SourceAddress, PVOID TargetAddress, SIZE_T Size)
+{
+    SIZE_T BytesWritten = 0;
+    return MmCopyVirtualMemory(
+        Process, SourceAddress,
+        PsGetCurrentProcess(), TargetAddress,
+        Size, KernelMode, &BytesWritten);
+}
+
+NTSTATUS WriteProcessMemory(PEPROCESS Process, PVOID SourceAddress, PVOID TargetAddress, SIZE_T Size)
+{
+    SIZE_T BytesWritten = 0;
+    return MmCopyVirtualMemory(
+        PsGetCurrentProcess(), SourceAddress,
+        Process, TargetAddress,
+        Size, KernelMode, &BytesWritten);
+}
+```
+
+### 7. UnloadDriver Limpeza ao descarregar
+
+Quando o driver é descarregado (ex: `sc stop` ou manual mapper unload), o sistema chama `UnloadDriver`. Precisamos:
+1. Remover o **symlink** primeiro (`IoDeleteSymbolicLink`) senão ficam referências ao device.
+2. Remover o **device** (`IoDeleteDevice`). A ordem importa: symlink antes do device.
 
 ```cpp
 VOID UnloadDriver(PDRIVER_OBJECT DriverObject)
@@ -154,14 +319,19 @@ VOID UnloadDriver(PDRIVER_OBJECT DriverObject)
     {
         IoDeleteDevice(DriverObject->DeviceObject);
     }
-
-    DbgPrint("[+] Unload Driver...");
 }
 ```
 
-Ordem: remove symlink primeiro, depois o device.
+### 8. DriverInitialize Registrar handlers e criar o device
 
-### 5. DriverInitialize — Registrar device e handlers
+Aqui configuramos o driver:
+- **MajorFunction** Array de ponteiros para funções. Diz ao kernel: "quando chegar IRP_MJ_CREATE, chame CreateClose; quando chegar IRP_MJ_DEVICE_CONTROL, chame DeviceControl".
+- **IoCreateDevice** Cria o dispositivo `\Device\SimpleDriver`. O nome é interno; o usermode não acessa diretamente.
+- **IoCreateSymbolicLink** Cria `\DosDevices\SimpleDriver` apontando para o device. O usermode abre com `\\.\SimpleDriver`, que resolve para esse symlink.
+- **DO_BUFFERED_IO** Usa buffered I/O (compatível com METHOD_BUFFERED).
+- **DO_DEVICE_INITIALIZING** Removemos essa flag para que o device aceite I/O. Durante a criação, ela impede acesso; depois de configurado, desligamos.
+
+**Como criar outro device?** Basta alterar `DEVICE_NAME` e `SYMLINK_NAME` e usar nomes diferentes (ex: `SimpleDriver2`).
 
 ```cpp
 NTSTATUS DriverInitialize(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
@@ -174,12 +344,12 @@ NTSTATUS DriverInitialize(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryP
     DriverObject->DriverUnload = UnloadDriver;
 
     UNICODE_STRING dev, sym;
-    PDEVICE_OBJECT pDevice;
+    PDEVICE_OBJECT pDevice = NULL;
 
     RtlInitUnicodeString(&dev, DEVICE_NAME);
 
     NTSTATUS status = IoCreateDevice(DriverObject, 0, &dev,
-        FILE_DEVICE_UNKNOWN, FILE_DEVICE_SECURE_OPEN, TRUE, &pDevice);
+        FILE_DEVICE_UNKNOWN, 0, TRUE, &pDevice);
 
     if (!NT_SUCCESS(status))
         return status;
@@ -196,168 +366,256 @@ NTSTATUS DriverInitialize(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryP
     pDevice->Flags |= DO_BUFFERED_IO;
     pDevice->Flags &= ~DO_DEVICE_INITIALIZING;
 
-    DbgPrint("[+] Driver Initialize...");
-
     return STATUS_SUCCESS;
 }
 ```
 
-- **DO_BUFFERED_IO**: I/O Manager copia dados usermode ↔ buffer kernel. Compatível com `METHOD_BUFFERED`.
-- **DO_DEVICE_INITIALIZING**: Remove essa flag para permitir handles.
+### 9. DriverEntry Ponto de entrada e suporte a manual mapping
 
-### 6. DriverEntry Suporte a manual mapping
+`DriverEntry` é chamado quando o driver é carregado. Existem dois cenários:
+1. **Loader tradicional** (sc load, SCM) O sistema passa um `DriverObject` válido. Chamamos `DriverInitialize` diretamente.
+2. **Manual mapper** (kdmapper, etc.) O loader passa `DriverObject == NULL`. Nesse caso, usamos `IoCreateDriver` para criar o driver internamente; ele chama nossa `DriverInitialize` com um novo `DriverObject`.
+
+**Por que `extern "C"`?** O loader procura o símbolo `DriverEntry` pelo nome exato. C++ faz *name mangling* (ex: `DriverEntry` vira `?DriverEntry@@...`). Com `extern "C"`, o nome fica `DriverEntry` e o loader encontra.
 
 ```cpp
 extern "C"
 NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 {
-    // Padrão: loaders como kdmapper passam NULL; usa IoCreateDriver
     if (!DriverObject)
     {
         UNICODE_STRING driverName;
         RtlInitUnicodeString(&driverName, L"\\Driver\\SimpleDriver");
         return IoCreateDriver(&driverName, &DriverInitialize);
     }
-
-    DbgPrint("[+] Driver Entry...");
     return DriverInitialize(DriverObject, RegistryPath);
 }
 ```
 
-Quando o driver é carregado via manual mapper (kdmapper, etc.), `DriverObject` vem `NULL`. Nesse caso usamos `IoCreateDriver`.
+---
+
+## DeviceControl Obtendo buffer e parâmetros
+
+No início do `DeviceControl`, precisamos dos dados enviados pelo usermode:
+
+- **`IoGetCurrentIrpStackLocation`** Cada driver na pilha tem uma "stack location" no IRP. Os parâmetros do `DeviceIoControl` (InputBufferLength, OutputBufferLength, IoControlCode) ficam lá.
+- **`Irp->AssociatedIrp.SystemBuffer`** Com `METHOD_BUFFERED`, o I/O Manager aloca um buffer e copia os dados do usermode para cá. É um `PVOID`; fazemos cast para a struct ou tipo correto.
+- **Validar tamanhos** Sempre checar `cbInputBufferLength >= sizeof(struct)` e `pSystemBuffer != NULL` antes de acessar. Buffer pequeno ou nulo pode causar BSOD.
+
+```cpp
+PIO_STACK_LOCATION pIrpStack = IoGetCurrentIrpStackLocation(Irp);
+PVOID pSystemBuffer = Irp->AssociatedIrp.SystemBuffer;
+ULONG cbInputBufferLength = pIrpStack->Parameters.DeviceIoControl.InputBufferLength;
+ULONG cbOutputBufferLength = pIrpStack->Parameters.DeviceIoControl.OutputBufferLength;
+ULONG IoControlCode = pIrpStack->Parameters.DeviceIoControl.IoControlCode;
+```
+
+Ao final:
+
+```cpp
+Irp->IoStatus.Status = status;
+Irp->IoStatus.Information = cbBytesReturned;
+IoCompleteRequest(Irp, IO_NO_INCREMENT);
+return status;
+```
 
 ---
 
-## METHOD_BUFFERED  Transferência de dados
+## METHOD_BUFFERED Por que usar?
 
-Com `METHOD_BUFFERED`:
-- O I/O Manager aloca um buffer no kernel
-- Copia os dados de entrada do usermode para esse buffer
-- O driver lê de `Irp->AssociatedIrp.SystemBuffer`
-- Para saída, o driver escreve no mesmo buffer; o I/O Manager copia de volta
+`METHOD_BUFFERED` é o mais seguro para começar: o I/O Manager cuida de tudo. O usermode passa um buffer; o kernel **copia** esse buffer para memória kernel (`SystemBuffer`). O driver trabalha apenas com a cópia não acessa memória do usermode diretamente. Depois, o I/O Manager copia de volta (até `IoStatus.Information` bytes) para o buffer de saída do usermode. Se precisar de buffers grandes ou zero-copy, estude `METHOD_IN_DIRECT` / `METHOD_OUT_DIRECT`.
 
-| Method | Input | Output |
-|--------|-------|--------|
-| METHOD_BUFFERED | SystemBuffer | SystemBuffer |
-| METHOD_IN_DIRECT | SystemBuffer | MDL (user buffer mapeado) |
-| METHOD_OUT_DIRECT | SystemBuffer | MDL |
-| METHOD_NEITHER | User buffer direto | User buffer direto |
+---
+
+## Como estender este driver
+
+| Objetivo | O que fazer |
+|----------|-------------|
+| Novo IOCTL (ex: obter base de DLL) | Adicione `#define IOCTL_GET_BASE 0x804`, crie struct com PID + nome do módulo, adicione `case IOCTL_GET_BASE` no switch |
+| Ler/escrever em outro processo | Use o PID do processo alvo em `KERNEL_READ_REQUEST` / `KERNEL_WRITE_REQUEST`; o fluxo já suporta |
+| Validar PID antes de usar | Chame `PsLookupProcessByProcessId` e verifique `NT_SUCCESS(status)` antes de qualquer acesso |
+| Buffers maiores | Considere `METHOD_IN_DIRECT` ou `METHOD_OUT_DIRECT` para evitar cópia dupla |
 
 ---
 
 ## Código completo do driver (driver.cpp)
 
 ```cpp
-#include <ntddk.h>
-
-extern "C" NTKERNELAPI NTSTATUS IoCreateDriver(
-    _In_opt_ PUNICODE_STRING DriverName,
-    _In_ PDRIVER_INITIALIZE InitializationFunction);
-
-#define IOCTL_ADD CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_SUB CTL_CODE(FILE_DEVICE_UNKNOWN, 0x802, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_MUL CTL_CODE(FILE_DEVICE_UNKNOWN, 0x803, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_DIV CTL_CODE(FILE_DEVICE_UNKNOWN, 0x804, METHOD_BUFFERED, FILE_ANY_ACCESS)
-
-#define DEVICE_NAME L"\\Device\\SimpleDriver"
-#define SYMLINK_NAME L"\\DosDevices\\SimpleDriver"
+#include "headers.h"
 
 NTSTATUS CreateClose(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 {
-    UNREFERENCED_PARAMETER(DeviceObject);
-    Irp->IoStatus.Status = STATUS_SUCCESS;
-    Irp->IoStatus.Information = 0;
-    IoCompleteRequest(Irp, IO_NO_INCREMENT);
-    return STATUS_SUCCESS;
+	UNREFERENCED_PARAMETER(DeviceObject);
+	Irp->IoStatus.Status = STATUS_SUCCESS;
+	Irp->IoStatus.Information = 0;
+	IoCompleteRequest(Irp, IO_NO_INCREMENT);
+	return STATUS_SUCCESS;
 }
 
 NTSTATUS DeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 {
-    UNREFERENCED_PARAMETER(DeviceObject);
-    PIO_STACK_LOCATION stack = IoGetCurrentIrpStackLocation(Irp);
-    NTSTATUS status = STATUS_INVALID_DEVICE_REQUEST;
-    ULONG bytes = 0;
+	UNREFERENCED_PARAMETER(DeviceObject);
 
-    switch (stack->Parameters.DeviceIoControl.IoControlCode)
-    {
-    case IOCTL_ADD:
-        DbgPrint("[+] IOCTL_ADD received\n");
-        break;
-    case IOCTL_SUB:
-        DbgPrint("[+] IOCTL_SUB received\n");
-        break;
-    case IOCTL_MUL:
-        DbgPrint("[+] IOCTL_MUL received\n");
-        break;
-    case IOCTL_DIV:
-        DbgPrint("[+] IOCTL_DIV received\n");
-        break;
-    default:
-        break;
-    }
+	PIO_STACK_LOCATION pIrpStack = IoGetCurrentIrpStackLocation(Irp);
+	PVOID pSystemBuffer = Irp->AssociatedIrp.SystemBuffer;
+	ULONG cbInputBufferLength = pIrpStack->Parameters.DeviceIoControl.InputBufferLength;
+	ULONG cbOutputBufferLength = pIrpStack->Parameters.DeviceIoControl.OutputBufferLength;
+	ULONG IoControlCode = pIrpStack->Parameters.DeviceIoControl.IoControlCode;
 
-    Irp->IoStatus.Status = status;
-    Irp->IoStatus.Information = bytes;
-    IoCompleteRequest(Irp, IO_NO_INCREMENT);
-    return status;
+	NTSTATUS status = STATUS_INVALID_DEVICE_REQUEST;
+	ULONG cbBytesReturned = 0;
+
+	switch (IoControlCode)
+	{
+	case IOCTL_ADD:
+	{
+		if (cbInputBufferLength >= sizeof(int) && cbOutputBufferLength >= sizeof(int) && pSystemBuffer != NULL)
+		{
+			int* pValue = (int*)pSystemBuffer;
+			*pValue = *pValue + 1;
+			cbBytesReturned = sizeof(int);
+			status = STATUS_SUCCESS;
+		}
+		else
+		{
+			status = STATUS_BUFFER_TOO_SMALL;
+		}
+		break;
+	}
+
+	case IOCTL_READ:
+	{
+		if (cbInputBufferLength >= sizeof(KERNEL_READ_REQUEST) && cbOutputBufferLength >= sizeof(KERNEL_READ_REQUEST) && pSystemBuffer != NULL)
+		{
+			PKERNEL_READ_REQUEST ReadRequest = (PKERNEL_READ_REQUEST)pSystemBuffer;
+			PEPROCESS Process = NULL;
+
+			status = PsLookupProcessByProcessId((HANDLE)(ULONG_PTR)ReadRequest->ProcessId, &Process);
+
+			if (!NT_SUCCESS(status))
+				break;
+
+			status = ReadProcessMemory(Process,
+				(PVOID)ReadRequest->Address,
+				(PVOID)&ReadRequest->Response,
+				ReadRequest->Size);
+
+			ObfDereferenceObject(Process);
+
+			if (NT_SUCCESS(status))
+			{
+				cbBytesReturned = sizeof(KERNEL_READ_REQUEST);
+			}
+		}
+		else
+		{
+			status = STATUS_BUFFER_TOO_SMALL;
+		}
+		break;
+	}
+
+	case IOCTL_WRITE:
+	{
+		if (cbInputBufferLength >= sizeof(KERNEL_WRITE_REQUEST) && cbOutputBufferLength >= sizeof(KERNEL_WRITE_REQUEST) && pSystemBuffer != NULL)
+		{
+			PKERNEL_WRITE_REQUEST WriteRequest = (PKERNEL_WRITE_REQUEST)pSystemBuffer;
+			PEPROCESS Process = NULL;
+
+			status = PsLookupProcessByProcessId((HANDLE)(ULONG_PTR)WriteRequest->ProcessId, &Process);
+
+			if (!NT_SUCCESS(status))
+				break;
+
+			status = WriteProcessMemory(Process,
+				(PVOID)&WriteRequest->Value,
+				(PVOID)WriteRequest->Address,
+				WriteRequest->Size);
+
+			ObfDereferenceObject(Process);
+
+			if (NT_SUCCESS(status))
+			{
+				cbBytesReturned = sizeof(KERNEL_WRITE_REQUEST);
+			}
+		}
+		else
+		{
+			status = STATUS_BUFFER_TOO_SMALL;
+		}
+		break;
+	}
+
+	default:
+		status = STATUS_INVALID_DEVICE_REQUEST;
+		break;
+	}
+
+	Irp->IoStatus.Status = status;
+	Irp->IoStatus.Information = cbBytesReturned;
+	IoCompleteRequest(Irp, IO_NO_INCREMENT);
+	return status;
 }
 
 VOID UnloadDriver(PDRIVER_OBJECT DriverObject)
 {
-    UNICODE_STRING sym;
-    RtlInitUnicodeString(&sym, SYMLINK_NAME);
-    IoDeleteSymbolicLink(&sym);
-    if (DriverObject->DeviceObject != NULL)
-        IoDeleteDevice(DriverObject->DeviceObject);
-    DbgPrint("[+] Unload Driver...");
+	UNICODE_STRING sym;
+	RtlInitUnicodeString(&sym, SYMLINK_NAME);
+	IoDeleteSymbolicLink(&sym);
+
+	if (DriverObject->DeviceObject != NULL)
+	{
+		IoDeleteDevice(DriverObject->DeviceObject);
+	}
 }
 
 NTSTATUS DriverInitialize(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 {
-    UNREFERENCED_PARAMETER(RegistryPath);
-    DriverObject->MajorFunction[IRP_MJ_CREATE] = CreateClose;
-    DriverObject->MajorFunction[IRP_MJ_CLOSE] = CreateClose;
-    DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = DeviceControl;
-    DriverObject->DriverUnload = UnloadDriver;
+	UNREFERENCED_PARAMETER(RegistryPath);
 
-    UNICODE_STRING dev, sym;
-    PDEVICE_OBJECT pDevice;
-    RtlInitUnicodeString(&dev, DEVICE_NAME);
+	DriverObject->MajorFunction[IRP_MJ_CREATE] = CreateClose;
+	DriverObject->MajorFunction[IRP_MJ_CLOSE] = CreateClose;
+	DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = DeviceControl;
+	DriverObject->DriverUnload = UnloadDriver;
 
-    NTSTATUS status = IoCreateDevice(DriverObject, 0, &dev,
-        FILE_DEVICE_UNKNOWN, FILE_DEVICE_SECURE_OPEN, TRUE, &pDevice);
+	UNICODE_STRING dev, sym;
+	PDEVICE_OBJECT pDevice = NULL;
 
-    if (!NT_SUCCESS(status))
-        return status;
+	RtlInitUnicodeString(&dev, DEVICE_NAME);
 
-    RtlInitUnicodeString(&sym, SYMLINK_NAME);
-    status = IoCreateSymbolicLink(&sym, &dev);
+	NTSTATUS status = IoCreateDevice(DriverObject, 0, &dev,
+		FILE_DEVICE_UNKNOWN, 0, TRUE, &pDevice);
 
-    if (!NT_SUCCESS(status))
-    {
-        IoDeleteDevice(pDevice);
-        return status;
-    }
+	if (!NT_SUCCESS(status))
+		return status;
 
-    pDevice->Flags |= DO_BUFFERED_IO;
-    pDevice->Flags &= ~DO_DEVICE_INITIALIZING;
-    DbgPrint("[+] Driver Initialize...");
-    return STATUS_SUCCESS;
+	RtlInitUnicodeString(&sym, SYMLINK_NAME);
+	status = IoCreateSymbolicLink(&sym, &dev);
+
+	if (!NT_SUCCESS(status))
+	{
+		IoDeleteDevice(pDevice);
+		return status;
+	}
+
+	pDevice->Flags |= DO_BUFFERED_IO;
+	pDevice->Flags &= ~DO_DEVICE_INITIALIZING;
+
+	return STATUS_SUCCESS;
 }
 
 extern "C"
 NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 {
-    if (!DriverObject)
-    {
-        UNICODE_STRING driverName;
-        RtlInitUnicodeString(&driverName, L"\\Driver\\SimpleDriver");
-        return IoCreateDriver(&driverName, &DriverInitialize);
-    }
-    DbgPrint("[+] Driver Entry...");
-    return DriverInitialize(DriverObject, RegistryPath);
+	if (!DriverObject)
+	{
+		UNICODE_STRING driverName;
+		RtlInitUnicodeString(&driverName, L"\\Driver\\SimpleDriver");
+		return IoCreateDriver(&driverName, &DriverInitialize);
+	}
+	return DriverInitialize(DriverObject, RegistryPath);
 }
 ```
+
 ---
 
 **Próximo post:** [Estudando IOCTL — Cliente usermode (Parte 2)](/estudando-ioctl-usermode-parte2/)

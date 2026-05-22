@@ -747,14 +747,9 @@ Em duas partes a gente saiu do "não sei o que é um PE" e chegou num
 hook funcional que intercepta chamadas da Win32 API. Tudo isso sem
 bibliotecas externas só Windows SDK e entendimento da estrutura PE.
 
-O que mais me marcou nesse estudo: **não tem mágica**. É só código,
-ponteiros, e leitura de structs. Quando você entende o formato, o que
-parecia ficção de filme de hacker vira engenharia normal.
-
 Espero que ajude alguém. Se achou erro ou tem sugestão, comenta aí.
 
 ---
 
 *Esse post faz parte da série IATHook, minhas anotações de estudo
-sobre IAT Hooking. Código completo no meu repositório (link em
-breve).*
+sobre IAT Hooking. Código completo no meu repositório*

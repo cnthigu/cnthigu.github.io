@@ -149,29 +149,45 @@ O **FileHeader** guarda informações gerais sobre o executável. Clica em
 
 ![CFF Explorer mostrando o File Header com NumberOfSections igual a 0007 em destaque](/assets/img/pe-do-zero/05-cff-file-header.png)
 
-Os campos que mais me interessaram aqui:
+Tem vários campos ali. Os que mais me interessaram:
 
-- **`Machine`**: arquitetura do binário. `0x8664` é AMD64 (x86-64). `0x14C`
-  seria x86 32 bits.
-- **`NumberOfSections`**: quantas seções o executável tem (`.text`, `.data`,
-  `.rdata`, etc.). Vou precisar disso pra iterar pelas seções logo mais.
-- **`TimeDateStamp`**: timestamp de quando o binário foi compilado.
-  Malwares costumam falsificar esse campo pra esconder a origem.
-- **`Characteristics`**: flags que indicam se é DLL, EXE, se tem debug
-  symbols, etc.
+**`Machine`**: a arquitetura do binário. `0x8664` significa AMD64 (x86-64).
+Se fosse `0x14C`, seria x86 32 bits. É a primeira coisa que um loader
+verifica pra saber se consegue rodar o executável na máquina atual.
 
-Código pra pegar o número de seções:
+**`NumberOfSections`**: quantas seções o executável tem. Pensa assim: o
+exe é dividido em pedaços, cada pedaço com uma função específica: `.text`
+pro código, `.data` pras variáveis, `.rdata` pra dados somente leitura.
+Esse número me diz quantos pedaços existem. Vou precisar dele logo mais
+pra iterar por todos.
+
+**`TimeDateStamp`**: quando o binário foi compilado. Curiosidade: malwares
+costumam falsificar esse campo pra esconder a origem. Se você encontrar
+um exe com timestamp de 1970, desconfie.
+
+**`Characteristics`**: um campo de flags que descreve o tipo do binário.
+É DLL? É EXE? Tem debug symbols? Cada bit tem um significado diferente.
+
+O campo que vou usar agora é o `NumberOfSections`. Pra acessar:
 
 ```cpp
 cout << "NumberOfSections: " << dec << nt->FileHeader.NumberOfSections << endl;
 ```
 
+`nt->FileHeader` funciona assim: `nt` já aponta pro NT Headers na memória.
+`->FileHeader` diz pro compilador "entra no campo FileHeader dessa struct".
+E `NumberOfSections` é o campo que quero ler. É basicamente navegar por
+camadas: NT Headers → FileHeader → campo específico.
+
 ![Console mostrando NumberOfSections e o nome da primeira seção](/assets/img/pe-do-zero/06-console-num-sections.png)
+
+Saiu o número certinho. É exatamente esse valor que vou usar como limite
+no loop de seções.
 
 ### Como o C++ sabe onde o FileHeader começa?
 
-Aqui eu tive uma dúvida: como `nt->FileHeader` sabe o endereço exato na
-memória?
+Mas aqui eu tive uma dúvida: como `nt->FileHeader` sabe o endereço exato
+na memória? Eu nao passei nenhum ponteiro pra ele.
 
 O Windows definiu a struct `IMAGE_NT_HEADERS` com os campos numa **ordem
 exata e fixa**. O layout real fica assim:
@@ -202,11 +218,27 @@ específica:
 
 Cada seção tem um cabeçalho (`IMAGE_SECTION_HEADER`) que descreve onde
 ela está e quanto espaço ocupa. A tabela de seções fica logo depois do
-`IMAGE_NT_HEADERS` na memória. Não existe outro ponteiro pra encontrá-la,
+`IMAGE_NT_HEADERS` na memória. Nao existe outro ponteiro pra encontrá-la,
 ela simplesmente começa imediatamente após.
 
 Pra acessar a primeira seção existe uma macro do Windows SDK feita
-exatamente pra isso:
+exatamente pra isso. Antes de ver o código, preciso apresentar dois campos
+que vão aparecer o tempo todo a partir daqui:
+
+**`VirtualAddress`**: o RVA onde essa seção começa quando o executável
+está carregado na memória. Nao é onde ela fica no arquivo em disco, é
+onde ela fica na memória depois que o Windows carregou tudo.
+
+**`PointerToRawData`**: o offset onde essa seção começa no arquivo em
+disco. É o endereço físico de verdade, sem virtualização nenhuma.
+
+Por que os dois existem separados? Porque o Windows reorganiza o
+executável ao carregar na memória. O que está num offset no arquivo pode
+estar num endereço completamente diferente na memória. Esses dois campos
+juntos sao o que a gente usa pra fazer essa conversão, como vai ficar
+claro na seção sobre RVA logo abaixo.
+
+Agora sim, o código pra acessar a primeira seção:
 
 ```cpp
 PIMAGE_SECTION_HEADER section = IMAGE_FIRST_SECTION(nt);
@@ -216,11 +248,15 @@ cout << "VirtualAddress : 0x"   << hex << section->VirtualAddress   << endl;
 cout << "PointerToRawData : 0x" << hex << section->PointerToRawData << endl;
 ```
 
-`IMAGE_FIRST_SECTION(nt)` calcula o endereço certo somando o tamanho do
-NT Headers ao ponteiro `nt`. O resultado é um ponteiro pra primeira
-entrada da tabela de seções.
+`IMAGE_FIRST_SECTION(nt)` calcula onde a primeira seção começa somando o
+tamanho do NT Headers ao ponteiro `nt`. Dai `section->Name` é o nome,
+`section->VirtualAddress` é o RVA na memória, e `section->PointerToRawData`
+é o offset no arquivo.
 
 ![Console mostrando o nome da seção, VirtualAddress e PointerToRawData](/assets/img/pe-do-zero/07-console-section-details.png)
+
+Apareceu o nome e os dois endereços. Bate com as colunas Virtual Address
+e Raw Address que o CFF Explorer mostra na aba Section Headers.
 
 ### Iterando por todas as seções
 
@@ -307,12 +343,15 @@ Import Table.
 
 ## 5. Optional Header e DataDirectory
 
-Apesar do nome, o Optional Header **nao e opcional** em executáveis. É
-onde ficam as informações mais importantes pra nós: `ImageBase`,
-`AddressOfEntryPoint`, e principalmente o **DataDirectory**.
+Apesar do nome, o Optional Header **nao e opcional** em executáveis. Dentro
+dele tem um campo que é o destino de tudo que a gente está fazendo: o
+**DataDirectory**.
 
-O DataDirectory é um array de 16 entradas. Cada uma aponta pra uma
-tabela diferente dentro do PE:
+Pensa no DataDirectory assim: é um índice central com 16 entradas, onde
+cada entrada é um ponteiro pra uma tabela diferente dentro do PE. Cada
+entrada guarda dois valores simples: o RVA de onde aquela tabela começa, e
+o tamanho dela em bytes. Só isso. Mas é ele que conecta o cabeçalho com
+todo o conteúdo do executável.
 
 ```
 DataDirectory[0]  → Export Table
@@ -322,22 +361,19 @@ DataDirectory[5]  → BaseReloc Table
 ...
 ```
 
-Cada entrada tem dois campos: o RVA onde aquela tabela começa e o
-tamanho em bytes.
+Eu quero chegar na Import Table, que fica no índice 1. O Windows SDK já
+define uma constante pra isso: `IMAGE_DIRECTORY_ENTRY_IMPORT`. Ela vale
+literalmente `1`, mas usar o nome deixa o código mais legível do que
+escrever `DataDirectory[1]` na mão.
 
-```cpp
-typedef struct _IMAGE_DATA_DIRECTORY {
-    DWORD VirtualAddress;  // RVA onde a tabela começa
-    DWORD Size;            // tamanho em bytes
-} IMAGE_DATA_DIRECTORY;
-```
-
-No CFF Explorer, clico em **Optional Header → Data Directories**:
+Clico em **Optional Header → Data Directories** no CFF Explorer pra
+ver esses valores antes de codar:
 
 ![CFF Explorer mostrando o Data Directories com Import Directory RVA e Size em destaque](/assets/img/pe-do-zero/08-cff-data-directories.png)
 
-O Import Directory tem um RVA nao-zero, é lá que fica a tabela de
-imports. Em código:
+Repara que o Import Directory tem um RVA diferente de zero e um Size.
+Aquele RVA é o endereço relativo de onde a tabela de imports começa na
+memória. Agora vou pegar esse valor no código:
 
 ```cpp
 IMAGE_DATA_DIRECTORY importDir =
@@ -347,39 +383,47 @@ cout << "Import RVA:  0x" << hex << importDir.VirtualAddress << endl;
 cout << "Import Size: "   << dec << importDir.Size           << endl;
 ```
 
-Esse RVA ainda nao é o endereço final. Pra chegar na
-`IMAGE_IMPORT_DESCRIPTOR` de verdade você precisa converter esse RVA
-usando as seções, exatamente o cálculo que vimos acima. Isso fica pra
-Parte 2.
+`nt->OptionalHeader` entra no OptionalHeader do NT Headers. Dai
+`.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT]` pega a entrada de índice 1.
+E `.VirtualAddress` lê o RVA de onde a Import Table começa.
 
-## 6. Section Headers no CFF Explorer
+Apareceu o RVA da Import Table. Mas esse valor sozinho ainda nao me leva
+a lugar nenhum. Pra chegar na `IMAGE_IMPORT_DESCRIPTOR` de verdade preciso
+converter esse RVA em offset real usando as seções, exatamente o cálculo
+que vimos na seção do RVA. Isso fica pra Parte 2.
 
-Por último, clica em **Section Headers** no CFF Explorer pra ver a tabela
-completa:
+## 6. Tabela de seções no CFF Explorer
+
+Agora que entendo o que `VirtualAddress` e `PointerToRawData` significam,
+clico em **Section Headers** no CFF Explorer e a tabela faz muito mais
+sentido do que faria antes:
 
 ![CFF Explorer mostrando a tabela de Section Headers com todas as seções do notepad: .text, .rdata, .data, .pdata, .didat, .rsrc, .reloc](/assets/img/pe-do-zero/09-cff-section-headers.png)
 
-O que cada coluna significa:
+Cada linha é uma seção. Cada coluna:
 
 | Coluna | Significado |
 |--------|-------------|
 | **Name** | nome da seção (até 8 bytes) |
 | **Virtual Size** | tamanho real do conteúdo na memória |
-| **Virtual Address** | RVA onde a seção começa na memória |
-| **Raw Size** | tamanho no arquivo (arredondado pro `FileAlignment`) |
-| **Raw Address** | offset da seção no arquivo em disco (`PointerToRawData`) |
+| **Virtual Address** | RVA onde a seção começa na memória (`section->VirtualAddress`) |
+| **Raw Size** | tamanho no arquivo, arredondado pro `FileAlignment` |
+| **Raw Address** | offset da seção no arquivo em disco (`section->PointerToRawData`) |
 | **Reloc Address / Linenumbers** | raramente usados em binários modernos |
 | **Characteristics** | flags de permissão da página |
 
-Repara nas Characteristics: `60000020` no `.text` significa executável +
-legível + contém código. `40000040` no `.rdata` significa somente leitura
-+ contém dados inicializados. É por isso que pra fazer IAT hooking você
-precisa do `VirtualProtect`, a IAT fica na `.rdata` que é read-only por
-padrão.
+As colunas Virtual Address e Raw Address sao exatamente os campos que
+o código imprimiu antes. O CFF Explorer está mostrando visualmente o
+mesmo dado que `section->VirtualAddress` e `section->PointerToRawData`
+acessam. Agora entendo o que cada linha representa e por que vou precisar
+desses valores na Parte 2.
 
-As colunas **Virtual Address** e **Raw Address** sao exatamente os valores
-que a gente usa pra converter RVA em offset. Agora entendo o que cada
-linha dessa tabela representa e por que vou precisar delas.
+Uma coisa que chama atenção nas Characteristics: `60000020` no `.text`
+significa executável + legível + contém código. `40000040` no `.rdata`
+significa somente leitura + contém dados inicializados. É por isso que
+pra fazer IAT hooking você precisa do `VirtualProtect`, a IAT fica na
+`.rdata` que é read-only por padrão. Tentar escrever direto lança uma
+exceção de proteção de memória.
 
 ## Onde chegamos
 

@@ -1,19 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="520" height="150" viewBox="0 0 520 150" font-family="monospace" font-size="13">
-  <rect width="520" height="150" fill="#1a1a2e"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="520" height="148" viewBox="0 0 520 148" font-family="monospace" font-size="13">
+  <rect width="520" height="148" fill="#1a1a2e"/>
 
-  <!-- DOS Header box -->
-  <rect x="20" y="16" width="480" height="118" rx="6" fill="#16213e" stroke="#e94560" stroke-width="2"/>
-  <text x="38" y="40" fill="#e94560" font-size="14" font-weight="bold">IMAGE_DOS_HEADER</text>
+  <rect x="20" y="14" width="480" height="120" rx="6" fill="#16213e" stroke="#e94560" stroke-width="2"/>
+  <text x="38" y="38" fill="#e94560" font-size="14" font-weight="bold">IMAGE_DOS_HEADER</text>
 
-  <!-- e_magic row -->
-  <rect x="38" y="50" width="444" height="28" rx="3" fill="#0f3460"/>
-  <text x="52" y="69" fill="#a8dadc">e_magic</text>
-  <text x="240" y="69" fill="#e9c46a">0x5A4D</text>
-  <text x="360" y="69" fill="#666">"MZ" — início de todo PE</text>
+  <rect x="38" y="48" width="444" height="28" rx="3" fill="#0f3460"/>
+  <text x="52" y="67" fill="#a8dadc">e_magic</text>
+  <text x="168" y="67" fill="#e9c46a">0x5A4D</text>
+  <text x="280" y="67" fill="#555">"MZ" - inicio de todo PE</text>
 
-  <!-- e_lfanew row -->
-  <rect x="38" y="86" width="444" height="28" rx="3" fill="#0f3460"/>
-  <text x="52" y="105" fill="#a8dadc">e_lfanew</text>
-  <text x="240" y="105" fill="#e9c46a">0x100</text>
-  <text x="360" y="105" fill="#666">offset → NT Headers</text>
+  <rect x="38" y="84" width="444" height="28" rx="3" fill="#0f3460"/>
+  <text x="52" y="103" fill="#a8dadc">e_lfanew</text>
+  <text x="168" y="103" fill="#e9c46a">0x100</text>
+  <text x="280" y="103" fill="#555">offset para os NT Headers</text>
 </svg>

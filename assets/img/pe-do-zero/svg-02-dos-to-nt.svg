@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="520" height="320" viewBox="0 0 520 320" font-family="monospace" font-size="13">
+  <rect width="520" height="320" fill="#1a1a2e"/>
+
+  <defs>
+    <marker id="arr" markerWidth="9" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 9 3.5, 0 7" fill="#f4a261"/>
+    </marker>
+  </defs>
+
+  <!-- DOS Header -->
+  <rect x="20" y="16" width="480" height="110" rx="6" fill="#16213e" stroke="#e94560" stroke-width="2"/>
+  <text x="38" y="40" fill="#e94560" font-size="14" font-weight="bold">IMAGE_DOS_HEADER</text>
+  <rect x="38" y="50" width="444" height="28" rx="3" fill="#0f3460"/>
+  <text x="52" y="69" fill="#a8dadc">e_magic</text>
+  <text x="220" y="69" fill="#e9c46a">0x5A4D  "MZ"</text>
+  <rect x="38" y="84" width="444" height="28" rx="3" fill="#0f3460"/>
+  <text x="52" y="103" fill="#a8dadc">e_lfanew</text>
+  <text x="220" y="103" fill="#e9c46a">0x100</text>
+  <text x="360" y="103" fill="#f4a261">─────┐</text>
+
+  <!-- Arrow down -->
+  <line x1="430" y1="126" x2="430" y2="162" stroke="#f4a261" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="440" y="150" fill="#f4a261" font-size="12">offset 0x100</text>
+
+  <!-- NT Headers -->
+  <rect x="20" y="168" width="480" height="130" rx="6" fill="#16213e" stroke="#4cc9f0" stroke-width="2"/>
+  <text x="38" y="192" fill="#4cc9f0" font-size="14" font-weight="bold">IMAGE_NT_HEADERS</text>
+  <rect x="38" y="200" width="444" height="28" rx="3" fill="#0f3460"/>
+  <text x="52" y="219" fill="#a8dadc">Signature</text>
+  <text x="220" y="219" fill="#e9c46a">0x4550  "PE\0\0"</text>
+  <rect x="38" y="234" width="214" height="28" rx="3" fill="#1a3a5c" stroke="#a8dadc" stroke-width="1"/>
+  <text x="52" y="253" fill="#a8dadc">FileHeader</text>
+  <rect x="262" y="234" width="220" height="28" rx="3" fill="#1a3a5c" stroke="#a8dadc" stroke-width="1"/>
+  <text x="276" y="253" fill="#a8dadc">OptionalHeader</text>
+  <text x="38" y="286" fill="#666" font-size="12">( + Section Headers logo em seguida )</text>
+</svg>
